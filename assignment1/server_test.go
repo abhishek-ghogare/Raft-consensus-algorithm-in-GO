@@ -8,14 +8,20 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"reflect"
+	//"reflect"
+    "sync"
 )
-
+var (
+	server_running = false
+)
 
 // Basic write and read
 func TestWrite(t *testing.T) {
-	go serverMain()
-	time.Sleep(time.Second)
+	if server_running==false {
+		go serverMain()
+		server_running = true
+		time.Sleep(time.Second)
+	}
 	name := "hi.txt"
 	contents := "bye"
 	exptime := 300000
@@ -31,7 +37,7 @@ func TestWrite(t *testing.T) {
 	fmt.Fprintf(conn, "write %v %v %v  \r\n%v\r\n", name, len(contents), exptime, contents)
 	scanner.Scan() // read first line
 	resp := scanner.Text() // extract the text from the buffer
-	arr := strings.Split(resp, " ") // split into OK and <version>
+	arr := strings.Fields(resp) // split into OK and <version>
 	expect(t, arr[0], "OK")
 	ver, err := strconv.Atoi(arr[1]) // parse version as number
 	if err != nil {
@@ -47,8 +53,8 @@ func TestWrite(t *testing.T) {
 	expect(t, arr[1], fmt.Sprintf("%v", version)) // expect only accepts strings, convert int version to string
 	expect(t, arr[2], fmt.Sprintf("%v", len(contents)))     
 	scanner.Scan()
-	fmt.Printf("%v----------", reflect.TypeOf(scanner.Text()))
 	expect(t, scanner.Text(), contents)
+	conn.Close()
 }
 
 func TestDelete(t *testing.T) {
@@ -114,9 +120,67 @@ func TestCas(t *testing.T) {
 	expect(t, arr[0], "OK")
 }
 
+func ConcurrentWrites(t *testing.T, wg *sync.WaitGroup) {
+
+	TestWrite(t)
+
+	wg.Done()
+}
+func ConcurrentDelete(t *testing.T, wg *sync.WaitGroup) {
+
+	TestDelete(t)
+
+	wg.Done()
+}
+func ConcurrentCas(t *testing.T, wg *sync.WaitGroup) {
+
+	TestCas(t)
+
+	wg.Done()
+}
+
+func eTestConcurrentWrite(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1000)
+
+	for i:=1 ; i<=1000 ; i++ {
+		//fmt.Printf("Adding write thread %v\n", i)
+		go ConcurrentWrites(t, &wg)
+	}
+
+	 wg.Wait()
+}
+
+// 
+func eTestConcurrentDelete(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(10)
+
+	for i:=1 ; i<=10 ; i++ {
+		//fmt.Printf("Adding write thread %v\n", i)
+		go ConcurrentDelete(t, &wg)
+	}
+
+	 wg.Wait()
+}
+
+
+func eTestConcurrentCas(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(10)
+
+	for i:=1 ; i<=10 ; i++ {
+		//fmt.Printf("Adding write thread %v\n", i)
+		go ConcurrentCas(t, &wg)
+	}
+
+	 wg.Wait()
+}
 // Useful testing function
 func expect(t *testing.T, a string, b string) {
 	if a != b {
 		t.Errorf("Expected %v, found %v", b, a) // t.Error is visible when running `go test -verbose`
 	}
 }
+
+
