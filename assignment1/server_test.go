@@ -121,10 +121,42 @@ func TestCas(t *testing.T) {
 }
 
 func ConcurrentWrites(t *testing.T, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-	TestWrite(t)
+	name := "hi.txt"
+	contents := "bye"
+	exptime := 300000
+	conn, err := net.Dial("tcp", "localhost"+PORT)
+	if err != nil {
+		t.Fatalf("[TEST]: Cannot connect:" + err.Error()) // report error through testing framework
+		return
+	}
 
-	wg.Done()
+	scanner := bufio.NewScanner(conn)
+
+	// Write a file
+	fmt.Fprintf(conn, "write %v %v %v  \r\n%v\r\n", name, len(contents), exptime, contents)
+	scanner.Scan() // read first line
+	resp := scanner.Text() // extract the text from the buffer
+	arr := strings.Fields(resp) // split into OK and <version>
+	expect(t, arr[0], "OK")
+	ver, err := strconv.Atoi(arr[1]) // parse version as number
+	if err != nil {
+		t.Error("Non-numeric version found")
+	}
+	version := int64(ver)
+
+	fmt.Fprintf(conn, "read %v\r\n", name) // try a read now
+	scanner.Scan()
+
+	arr = strings.Split(scanner.Text(), " ")
+	expect(t, arr[0], "CONTENTS")
+	expect(t, arr[1], fmt.Sprintf("%v", version)) // expect only accepts strings, convert int version to string
+	expect(t, arr[2], fmt.Sprintf("%v", len(contents)))     
+	scanner.Scan()
+	expect(t, scanner.Text(), contents)
+	conn.Close()
+
 }
 func ConcurrentDelete(t *testing.T, wg *sync.WaitGroup) {
 
@@ -139,7 +171,7 @@ func ConcurrentCas(t *testing.T, wg *sync.WaitGroup) {
 	wg.Done()
 }
 
-func eTestConcurrentWrite(t *testing.T) {
+func TestConcurrentWrite(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1000)
 
