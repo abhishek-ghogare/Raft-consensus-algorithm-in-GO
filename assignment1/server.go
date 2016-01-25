@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 	"bufio"
-	//"log"
+	"log"
 	//"bytes"
 	"strconv"
 	"math/rand"
@@ -29,7 +29,7 @@ var (
 	lock sync.RWMutex
 )
 
-const PORT = ":8080"
+const PORT = ":8081"
 
 
 
@@ -224,7 +224,7 @@ func serverMain() {
 	listener,err := net.Listen("tcp", PORT)   
 
 	if err != nil {
-		// log.Fatalf("[SERVER]:[ERR]:Error in listener: %v", err.Error())		
+		log.Fatalf("[SERVER]:[ERR]:Error in listener: %v", err.Error())		
 	}
 
 	// log.Printf("[SERVER]:[INFO]:Server started on %v", PORT)
@@ -247,7 +247,7 @@ func processClient(conn net.Conn) {
 	for{
 		line, isPrefix, err := reader.ReadLine()	// Read until \n or \r\n
 		if err != nil || isPrefix {
-			// log.Printf("[SERVER]:[ERR]:Error in reading from client: %v", err.Error())
+			//// log.Printf("[SERVER]:[ERR]:Error in reading from client: %v", err.Error())
 			errMsg := "ERR_CMD_ERR\r\n"
 			conn.Write([]byte(errMsg))
 			return
