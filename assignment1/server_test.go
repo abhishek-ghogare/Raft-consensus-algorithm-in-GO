@@ -197,9 +197,9 @@ func eTestConcurrentDelete(t *testing.T) {
 */
 
 /*
- *	Check 
- *
- *
+ *	Employ multiple threads to do CAS on same file repeatedly until each thread completes the CAS successfully.
+ *	This way, if any two threads updates on same file version, this is the error.
+ *	This states that on server side, there is concurrency handled correctly
  */
 func TestConcurrentCas(t *testing.T) {
 	var wg sync.WaitGroup
@@ -207,20 +207,20 @@ func TestConcurrentCas(t *testing.T) {
 	version_chan := make(chan int64)
 	ver_list := [] int64{}
 
-	wg.Add(10)
+	wg.Add(100)
 
-	for i:=0 ; i<10 ; i++ {
+	for i:=0 ; i<100 ; i++ {
 		//fmt.Printf("Adding write thread %v\n", i)
 		go ConcurrentCas(t,version_chan,&wg)
 	}
 
-	for i:=0 ; i<10 ; i++ {
+	for i:=0 ; i<100 ; i++ {
 		var v int64 = 0
 		v = <-version_chan
   		//fmt.Printf("Ver%v : %v\n", i, v)
   		for j:=0 ; j<len(ver_list) ; j++ {
   			if ver_list[j] == v {
-  				t.Error("Two different CAS happened on same old version number:\nculprit version ", v, "\nmatched index:",j)
+  				t.Error("Two different CAS happened on same old version number:\nculprit version ", v, "\nmatched index:",j, "\ncurrent index:",len(ver_list))
   				break
   			}
   		}

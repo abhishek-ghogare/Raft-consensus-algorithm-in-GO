@@ -8,9 +8,9 @@ import (
 	"log"
 	//"bytes"
 	"strconv"
-	"math/rand"
+	//"math/rand"
 	"io"
-	"time"
+	//"time"
     "sync"
     //"sync/atomic"
 )
@@ -67,8 +67,6 @@ func handleWrite(command []string, conn net.Conn, reader *bufio.Reader){
 	}
 
 
-	rand.Seed(time.Now().Unix())
-	version := rand.Int63()
 	var exptime uint64 = 0
 	if len(command) == 4 {
 		exptime, err = strconv.ParseUint(command[3],0,64)
@@ -84,6 +82,13 @@ func handleWrite(command []string, conn net.Conn, reader *bufio.Reader){
 	// TODO:: Trim last "\r\n" from buff
 
 	lock.Lock()
+	f , ok := m[filename]
+	var version int64 = 0
+	if ok {
+		version = f.version + 1
+	} else {
+		version = int64(1)
+	}
 	m[filename]=filestore{filename,int(numbytes),version,int64(exptime),buff}		
 	lock.Unlock()
 	successMsg:="OK "+strconv.FormatInt(version,10)+"\r\n"	
@@ -199,10 +204,9 @@ func handleCas(cmd []string, conn net.Conn,  reader *bufio.Reader){
 	}
 
 	lock.Lock()
-	if _, ok := m[filename]; ok {
+	if f, ok := m[filename]; ok {
 		if m[filename].version == version {
-			rand.Seed(version)
-			newVersion:= rand.Int63()
+			newVersion:= f.version + 1
 			m[filename]=filestore{filename,int(numbytes),newVersion,exptime,buff}
 			lock.Unlock()
 			fmt.Fprintf(conn, "OK %v\r\n", newVersion)					
