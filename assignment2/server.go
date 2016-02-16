@@ -1,17 +1,17 @@
 package main
 
 import (
-	"fmt"
-	"net"
-	"strings"
-	"bufio"
-	"log"
+	//"fmt"
+	//"net"
+	//"strings"
+	//"bufio"
+	//"log"
 	//"bytes"
-	"strconv"
+	//"strconv"
 	//"math/rand"
-	"io"
+	//"io"
 	//"time"
-    "sync"
+    //"sync"
     //"sync/atomic"
 )
 
@@ -21,14 +21,26 @@ type LogEntry struct {
 	index 	int64
 }
 
+
+var TIMEOUTTIME = 1000;	// Timeout in ms
+
 const (
-	CANDIDATE=0,
-	FOLLOWER=1,
-	LEADER=2
+	CANDIDATE=0;
+	FOLLOWER=1;
+	LEADER=2;
 	)
 
+const (
+	APPREQ=0;
+	VOTEREQ=1;
+	APPRESP=2;
+	VOTERESP=3;
+	TIMEOUT=4;
+	)
+
+
 type Event struct {
-	eventType int 		// appendRequest, requestVote
+	eventType int 		// appendRequest, requestVote, appendResp, requestVoteRest, timeout
 
 	// Common variables
 	term 	int64
@@ -44,6 +56,9 @@ type Event struct {
 	candidateId		int64
 	lastLogIndex	int64
 	lastLogTerm		int64
+
+	// Others
+	fromId			int64
 }
 
 type ServerState struct {
@@ -51,7 +66,7 @@ type ServerState struct {
 	server_id	int64
 	currentTerm	int64
 	votedFor 	int64
-	log 		[]log_entry
+	log 		[]LogEntry
 
 	// Non-persistent state
 	commitIndex	int64
@@ -59,15 +74,26 @@ type ServerState struct {
 	matchIndex	[]int64
 	myState     int 		// CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
 
-	connection 		chan event
+	connection 		chan Event
+}
+
+func (server *ServerState) startServer () {
+	// Initialise the variables and timeout
+
+	for {
+		event := <- server.connection
+		switch(event.eventType) {
+		case APPREQ :
+
+		}
+	}
+}
+
+func (server *ServerState) follower () {
+
 }
 
 var server ServerState
-
-func startServer (server ServerState) {
-
-}
-
 func main () {
 
 }
