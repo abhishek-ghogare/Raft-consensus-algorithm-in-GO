@@ -161,7 +161,8 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 	}
 
 	// Reset heartbeat timeout
-	Alarm ( heartbeat_time )
+	alarm alarmAction{time:TIMEOUTTIME}
+	append(actions, alarm)
 
 	// This server term is not so up-to-date, so update
 	currentTerm = term
@@ -170,7 +171,10 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 		case LEADER:
 			// mystate == leader && term == currentTerm, this is impossible, as no two leaders will be elected at any term
 			if ( event.term == server.currentTerm ) {
-				return appendRequestRespEvent{fromId:0, term:-1, success:false}
+				appendResp appendRequestRespEvent{fromId:server.server_id, term:-1, success:false}
+				resp sendAction{toId:event.fromId , event:appendResp}
+				append(actions, resp)
+				return actions
 			}
 			// continue flow to next case
 		case CANDIDATE:
@@ -180,7 +184,10 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 		case FOLLOWER:
 			if ( len(server.log)-1 < event.prevLogIndex || server.log[event.prevLogIndex].term != event.prevLogTerm ) {
 				// Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
-				return appendRequestRespEvent{fromId:0, term:server.currentTerm, success:false}
+				appendResp appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:false}
+				resp sendAction{toId:event.fromId , event:appendResp}
+				append(actions, resp)
+				return actions
 			}
 
 			if( len(server.log)-1 > event.prevLogIndex ) {
@@ -191,7 +198,10 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 				} else {
 					// No need to append, duplecate append request
 					server.log = server.log[:event.prevLogIndex+1]	// Trimming remaining entries
-					return appendRequestRespEvent{fromId:0, term:server.currentTerm, success:true}
+					appendResp appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:true}
+					resp sendAction{toId:event.fromId , event:appendResp}
+					append(actions, resp)
+					return actions
 				}
 			}
 
@@ -203,7 +213,10 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 				server.commitIndex = min(event.leaderCommit, len(server.log)-1)
 			}
 
-			return appendRequestRespEvent{fromId:0, term:server.currentTerm, success:true}
+			appendResp appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:true}
+			resp sendAction{toId:event.fromId , event:appendResp}
+			append(actions, resp)
+			return actions
 			break
 	}
 
