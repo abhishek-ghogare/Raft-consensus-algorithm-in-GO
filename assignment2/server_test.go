@@ -1,15 +1,8 @@
 package main
 
 import (
-    //"bufio"
-    //"fmt"
-    //"net"
-    //"strconv"
-    //"strings"
     "testing"
-    //"time"
     "reflect"
-    //"sync"
 )
 
 
@@ -65,6 +58,8 @@ func TestAppendRequestBasic(t *testing.T) {
             }
         case alarmAction:
             alarmActionReceived = true
+        case logStore:
+            // valid log store actions
         default:
             t.Errorf("Invalid action returned")
         }
@@ -106,6 +101,8 @@ func TestAppendRequest_leader_with_old_term(t *testing.T) {
             }
         case alarmAction:
             alarmActionReceived = true
+        case logStore:
+            // valid log store actions
         default:
             t.Errorf("Invalid action returned")
         }
@@ -252,6 +249,8 @@ func TestAppendRequest_override_some_entries_from_old_leader(t *testing.T) {
             }
         case alarmAction:
             alarmActionReceived = true
+        case logStore:
+            // valid log store actions
         default:
             t.Errorf("Invalid action returned")
         }
@@ -522,6 +521,8 @@ func TestAppendRequestResponse_commit_check(t *testing.T) {
             default:
                 t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
             }
+        case commitAction:
+            // valid commit actions
         default:
             t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
         }
@@ -1125,4 +1126,39 @@ func TestTimeout_candidate(t *testing.T) {
 
 
 
+/********************************************************************************************
+ *                                                                                          *
+ *                              Append Client Testing                                       *
+ *                                                                                          *
+ ********************************************************************************************/
+
+func TestAppendClient_leader(t *testing.T) {
+    server := ServerState{}
+    server.setupServer(LEADER, 7)
+
+    // Updating server term from 0 to 1 with valid append request
+    event1   := appendEvent{}
+    actions  := server.processEvent(event1)
+    
+    expect(t, server.currentTerm, 0, "Current term expected to be 0")
+
+    expect(t, server.myState, LEADER, "State should remain leader")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            case appendRequestEvent:
+                // valid empty heartbeat event
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        case logStore:
+            // valid log store action
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+}
 

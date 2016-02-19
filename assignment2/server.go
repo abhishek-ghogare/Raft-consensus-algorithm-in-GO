@@ -1,20 +1,7 @@
 package main
 
 import (
-    "fmt"
     "sort"
-    //"net"
-    //"strings"
-    //"bufio"
-    //"log"
-    //"bytes"
-    //"strconv"
-    //"math/rand"
-    //"io"
-    //"time"
-    //"sync"
-    //"sync/atomic"
-    //"reflect"
 )
 
 
@@ -79,6 +66,10 @@ type timeoutEvent struct {
 
 }
 
+type appendEvent struct {
+    // ignoring data
+}
+
 
 /********************************************************************
  *                                                                  *
@@ -92,7 +83,7 @@ type sendAction struct {
 
 type commitAction struct {
     index   int       // for error, set to -1
-    data    []LogEntry
+    data    []byte
     err     string
 }
 
@@ -338,8 +329,6 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
             alarm := alarmAction{time:TIMEOUTTIME}
             actions = append(actions, alarm)
 
-            // TODO:: Check if empty heartbeat append request here
-
             if server.currentTerm < event.term {
                 // This server term is not so up-to-date, so update
                 server.currentTerm  = event.term
@@ -359,24 +348,31 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 // There are entries from last leaders
                 // Strip them up to the end
                 server.log = server.log[:event.prevLogIndex+1]
-                fmt.Printf("")
             }
 
-            // Update log if entries are not present
-            server.log = append(server.log, event.entries...)
-            // TODO:: logStore action
-
-            if ( event.leaderCommit > server.commitIndex ) {
-                // If leader has commited entries, so should this server
-                if event.leaderCommit < int(len(server.log)-1) {
-                    server.commitIndex = event.leaderCommit
-                } else {
-                    server.commitIndex = int(len(server.log)-1)
+            if len(event.entries) == 0 {
+                // Empty log entries for heartbeat
+                return actions
+            } else {
+                // Update log if entries are not present
+                server.log = append(server.log, event.entries...)
+    
+                for _, log := range event.entries {
+                    action := logStore{ index: log.index, data:[]byte{}}
+                    actions = append(actions,action)
+                }
+    
+                if ( event.leaderCommit > server.commitIndex ) {
+                    // If leader has commited entries, so should this server
+                    if event.leaderCommit < int(len(server.log)-1) {
+                        server.commitIndex = event.leaderCommit
+                    } else {
+                        server.commitIndex = int(len(server.log)-1)
+                    }
                 }
             }
     }
 
-    // TODO: do commit operations
     appendResp := appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:true, lastLogIndex:server.getLastLog().index}
     resp := sendAction{toId:event.fromId , event:appendResp}
     actions = append(actions, resp)
@@ -443,7 +439,16 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
 
                 //fmt.Printf("\nsorted[i]: %v ::: currterm: %v", sorted[i], server.currentTerm)
                 if sorted[i] > server.commitIndex && server.log[sorted[i]].term == server.currentTerm {
-                    // TODO: commit all up to sorted[i]
+                    
+                    // Commit all not committed eligible entries
+                    for k:=server.commitIndex+1 ; k<=sorted[i] ; k++ {
+                        action := commitAction { 
+                                    index   : k,
+                                    data    : []byte{},
+                                    err     : "" }
+                        actions = append(actions, action)
+                    }
+
                     server.commitIndex = sorted[i]
                     break
                 }
@@ -516,6 +521,50 @@ func (server *ServerState) timeout ( event timeoutEvent ) []interface{} {
 
 /********************************************************************
  *                                                                  *
+ *                     Append from client                           *
+ *                                                                  *
+ ********************************************************************/
+func (server *ServerState) appendClientRequest ( event appendEvent ) []interface{} {
+
+    actions := make([]interface{}, 0)
+
+    switch(server.myState) {
+        case LEADER:
+            // append to self
+            log := LogEntry{index:server.getLastLog().index+1, term:server.currentTerm}
+            server.log = append(server.log, log)
+
+            action := logStore{ index: log.index, data:[]byte{}}
+            actions = append(actions,action)
+
+            logs := append([]LogEntry{}, log)
+            // Send appendRequests to all
+            for i:=0 ; i<server.numberOfNodes ; i++ {
+
+                if i != server.server_id {
+                    event1      := appendRequestEvent{
+                                    fromId          : server.server_id, 
+                                    term            : server.currentTerm, 
+                                    prevLogIndex    : server.getLastLog().index, 
+                                    prevLogTerm     : server.getLastLog().term, 
+                                    entries         : logs, 
+                                    leaderCommit    : server.commitIndex}
+                    action      := sendAction {toId : i, event : event1 }
+                    actions      = append(actions, action)
+                }
+            }
+        case CANDIDATE:
+        case FOLLOWER:
+    }
+    return actions
+}
+
+
+
+
+
+/********************************************************************
+ *                                                                  *
  *                          Process event                           *
  *                                                                  *
  ********************************************************************/
@@ -533,6 +582,8 @@ func (server *ServerState) processEvent ( event interface{} ) []interface{} {
             return server.voteRequestResponse(event.(requestVoteRespEvent))
         case timeoutEvent:
             return server.timeout(event.(timeoutEvent))
+        case appendEvent:
+            return server.appendClientRequest(event.(appendEvent))
         default:
             return nil
     }
@@ -546,24 +597,3 @@ func main () {
     server.setupServer(FOLLOWER,10)
 }*/ 
 
-
-
-
-
-
-
-
-
-
-
-/*
-
-
-TODO : make sure while updating state to leader, we set our selve matchIndex to our log len
-
-
-
-
-
-
-*/
