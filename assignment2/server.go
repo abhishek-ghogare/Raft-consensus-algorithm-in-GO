@@ -275,6 +275,7 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
                     server.matchIndex   = make([]int, server.numberOfNodes)
                     server.nextIndex    = make([]int, server.numberOfNodes)
                     server.matchIndex[server.server_id] = server.getLastLog().index
+
                     // Send empty appendRequests
                     for i:=0 ; i<server.numberOfNodes ; i++ {
                         server.nextIndex[i] = server.getLastLog().index+1
@@ -363,6 +364,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 
             // Update log if entries are not present
             server.log = append(server.log, event.entries...)
+            // TODO:: logStore action
 
             if ( event.leaderCommit > server.commitIndex ) {
                 // If leader has commited entries, so should this server
@@ -458,6 +460,59 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
 }
 
 
+/********************************************************************
+ *                                                                  *
+ *                          Timeout                                 *
+ *                                                                  *
+ ********************************************************************/
+func (server *ServerState) timeout ( event timeoutEvent ) []interface{} {
+
+    actions := make([]interface{}, 0)
+
+    switch(server.myState) {
+        case LEADER:
+            // Send empty appendRequests
+            for i:=0 ; i<server.numberOfNodes ; i++ {
+
+                if i != server.server_id {
+                    event1      := appendRequestEvent{
+                                    fromId          : server.server_id, 
+                                    term            : server.currentTerm, 
+                                    prevLogIndex    : server.getLastLog().index, 
+                                    prevLogTerm     : server.getLastLog().term, 
+                                    entries         : []LogEntry{}, 
+                                    leaderCommit    : server.commitIndex}
+                    action      := sendAction {toId : i, event : event1 }
+                    actions      = append(actions, action)
+                }
+            }
+        case CANDIDATE:
+            // Restart election
+            fallthrough
+        case FOLLOWER:
+            // Start election
+            server.myState = CANDIDATE
+            server.votedFor = server.server_id
+            server.receivedVote[server.server_id] = server.currentTerm  // voting to self
+
+            // Vote request to all
+            for i:=0 ; i<server.numberOfNodes ; i++ {
+
+                if i != server.server_id {
+                    event1      := requestVoteEvent{
+                                    fromId          : server.server_id, 
+                                    term            : server.currentTerm, 
+                                    lastLogIndex    : server.getLastLog().index, 
+                                    lastLogTerm     : server.getLastLog().term}
+                    action      := sendAction {toId : i, event : event1 }
+                    actions      = append(actions, action)
+                }
+            }
+    }
+    return actions
+}
+
+
 
 /********************************************************************
  *                                                                  *
@@ -470,16 +525,16 @@ func (server *ServerState) processEvent ( event interface{} ) []interface{} {
     switch event.(type) {
         case appendRequestEvent:
             return server.appendRequest(event.(appendRequestEvent))
-            break;
         case appendRequestRespEvent:
             return server.appendRequestResponse(event.(appendRequestRespEvent))
-            break;
         case requestVoteEvent:
             return server.voteRequest(event.(requestVoteEvent))
-            break;
         case requestVoteRespEvent:
             return server.voteRequestResponse(event.(requestVoteRespEvent))
-            break;
+        case timeoutEvent:
+            return server.timeout(event.(timeoutEvent))
+        default:
+            return nil
     }
 
     return make([]interface{},0)
@@ -504,7 +559,6 @@ func main () {
 /*
 
 
-TODO : update matchIndex of self leader whenever appending entries to self
 TODO : make sure while updating state to leader, we set our selve matchIndex to our log len
 
 

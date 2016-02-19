@@ -794,8 +794,7 @@ func TestVoteRequest_voted_for_different_candidate_for_same_term(t *testing.T) {
  *                                                                                          *
  ********************************************************************************************/
 
-
-func TestVoteRequestResponseBasic(t *testing.T) {
+func TestVoteRequestResponseBasic1(t *testing.T) {
     server := ServerState{}
     server.setupServer(LEADER, 7)
 
@@ -813,7 +812,99 @@ func TestVoteRequestResponseBasic(t *testing.T) {
     event1   := appendRequestEvent{fromId:1, term:1, prevLogIndex:0, prevLogTerm:0, entries:logs, leaderCommit:1}
     actions := server.processEvent(event1)
 
-    // Make leader
+
+    // server should drop this event as follower with same term
+    event   := requestVoteRespEvent{fromId:1, term:1, voteGranted:false}
+    actions = server.processEvent(event)
+
+    expect(t, server.currentTerm, 1, "Current term expected to be 1")
+
+    expect(t, server.myState, FOLLOWER, "State should remain follower")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+
+
+
+    // Make candidate
+    server.myState  = CANDIDATE
+    server.votedFor = server.server_id
+    server.receivedVote[server.server_id] = server.currentTerm  // voting to self
+
+    // server should drop this event
+    event   = requestVoteRespEvent{fromId:1, term:0, voteGranted:false}
+    actions = server.processEvent(event)
+
+    expect(t, server.currentTerm, 1, "Current term expected to be 1")
+
+    expect(t, server.myState, CANDIDATE, "State should remain candidate")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+
+
+    event   = requestVoteRespEvent{fromId:1, term:4, voteGranted:false}
+    actions = server.processEvent(event)
+    
+    expect(t, server.currentTerm, 4, "Current term expected to be 1")
+
+    expect(t, server.myState, FOLLOWER, "State should change to follower")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+}
+
+
+
+func TestVoteRequestResponse_election_win(t *testing.T) {
+    server := ServerState{}
+    server.setupServer(LEADER, 7)
+
+    logs    := make([]LogEntry, 0)
+    log     := LogEntry{term:0, index:1}
+    logs    = append(logs, log)
+    log     = LogEntry{term:0, index:2}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:3}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:4}
+    logs    = append(logs, log)
+
+    // Updating server term from 0 to 1 with valid append request
+    event1   := appendRequestEvent{fromId:1, term:1, prevLogIndex:0, prevLogTerm:0, entries:logs, leaderCommit:1}
+    actions := server.processEvent(event1)
+
+    // Make candidate
     server.myState  = CANDIDATE
     server.votedFor = server.server_id
     server.receivedVote[server.server_id] = server.currentTerm  // voting to self
@@ -850,3 +941,188 @@ func TestVoteRequestResponseBasic(t *testing.T) {
         }
     }
 }
+
+
+
+func TestVoteRequestResponse_election_lose(t *testing.T) {
+    server := ServerState{}
+    server.setupServer(LEADER, 7)
+
+    logs    := make([]LogEntry, 0)
+    log     := LogEntry{term:0, index:1}
+    logs    = append(logs, log)
+    log     = LogEntry{term:0, index:2}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:3}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:4}
+    logs    = append(logs, log)
+
+    // Updating server term from 0 to 1 with valid append request
+    event1   := appendRequestEvent{fromId:1, term:1, prevLogIndex:0, prevLogTerm:0, entries:logs, leaderCommit:1}
+    actions := server.processEvent(event1)
+
+    // Make candidate
+    server.myState  = CANDIDATE
+    server.votedFor = server.server_id
+    server.receivedVote[server.server_id] = server.currentTerm  // voting to self
+
+    event   := requestVoteRespEvent{fromId:1, term:1, voteGranted:true}
+    actions = server.processEvent(event)
+    event   = requestVoteRespEvent{fromId:2, term:1, voteGranted:false}
+    actions = server.processEvent(event)
+    event   = requestVoteRespEvent{fromId:3, term:1, voteGranted:false}
+    actions = server.processEvent(event)
+    event   = requestVoteRespEvent{fromId:4, term:1, voteGranted:false}
+    actions = server.processEvent(event)
+    event   = requestVoteRespEvent{fromId:5, term:1, voteGranted:false}
+    actions = server.processEvent(event)
+    event   = requestVoteRespEvent{fromId:6, term:1, voteGranted:true}
+    actions = server.processEvent(event)
+    
+    expect(t, server.currentTerm, 1, "Current term expected to be 1")
+
+    expect(t, server.myState, FOLLOWER, "State should change to follower")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+}
+
+
+
+
+/********************************************************************************************
+ *                                                                                          *
+ *                                    Timeout Testing                                       *
+ *                                                                                          *
+ ********************************************************************************************/
+
+func TestTimeout_leader(t *testing.T) {
+    server := ServerState{}
+    server.setupServer(LEADER, 7)
+
+    // Updating server term from 0 to 1 with valid append request
+    event1   := timeoutEvent{}
+    actions  := server.processEvent(event1)
+    
+    expect(t, server.currentTerm, 0, "Current term expected to be 0")
+
+    expect(t, server.myState, LEADER, "State should remain leader")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            case appendRequestEvent:
+                // valid empty heartbeat event
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+}
+
+func TestTimeout_follower(t *testing.T) {
+    server := ServerState{}
+    server.setupServer(LEADER, 7)
+
+    logs    := make([]LogEntry, 0)
+    log     := LogEntry{term:0, index:1}
+    logs    = append(logs, log)
+    log     = LogEntry{term:0, index:2}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:3}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:4}
+    logs    = append(logs, log)
+
+    // Updating server term from 0 to 1 with valid append request
+    event1   := appendRequestEvent{fromId:1, term:1, prevLogIndex:0, prevLogTerm:0, entries:logs, leaderCommit:1}
+    actions  := server.processEvent(event1)
+
+    event    := timeoutEvent{}
+    actions   = server.processEvent(event)
+    
+    expect(t, server.currentTerm, 1, "Current term expected to be 1")
+
+    expect(t, server.myState, CANDIDATE, "State should change to candidate")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            case requestVoteEvent:
+                // valid vote request events
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+}
+
+
+func TestTimeout_candidate(t *testing.T) {
+    server := ServerState{}
+    server.setupServer(LEADER, 7)
+
+    logs    := make([]LogEntry, 0)
+    log     := LogEntry{term:0, index:1}
+    logs    = append(logs, log)
+    log     = LogEntry{term:0, index:2}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:3}
+    logs    = append(logs, log)
+    log     = LogEntry{term:1, index:4}
+    logs    = append(logs, log)
+
+    // Updating server term from 0 to 1 with valid append request
+    event1   := appendRequestEvent{fromId:1, term:1, prevLogIndex:0, prevLogTerm:0, entries:logs, leaderCommit:1}
+    actions  := server.processEvent(event1)
+
+    // Make candidate
+    server.myState  = CANDIDATE
+    server.votedFor = server.server_id
+    server.receivedVote[server.server_id] = server.currentTerm  // voting to self
+
+    event    := timeoutEvent{}
+    actions   = server.processEvent(event)
+    
+    expect(t, server.currentTerm, 1, "Current term expected to be 1")
+
+    expect(t, server.myState, CANDIDATE, "State should remain candidate")
+
+    for _, action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            switch action.event.(type) {
+            case requestVoteEvent:
+                // valid vote request events
+            default:
+                t.Errorf("Invalid event returned:%v", reflect.TypeOf(action.event).String() )
+            }
+        default:
+            t.Errorf("Invalid action returned:%v", reflect.TypeOf(action).String() )
+        }
+    }
+}
+
+
+
+
