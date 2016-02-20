@@ -46,7 +46,7 @@ type LogEntry struct {
 type appendRequestEvent struct {
 	fromId			int64
 	term			int64
-	leaderId 		int64
+	//leaderId 		int64	// same as fromId
 	prevLogIndex	int64
 	prevLogTerm		int64
 	entries			[]LogEntry
@@ -115,6 +115,9 @@ type ServerState struct {
 	server_id	int64
 	currentTerm	int64
 	votedFor 	int64		// -1: not voted
+
+	// log is initialised with single empty log, to make life easier in future checking
+	// Index starts from 1, as first empty entry is present
 	log 		[]LogEntry
 
 	// Non-persistent state
@@ -219,12 +222,6 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 		return actions
 	}
 
-	// Reset heartbeat timeout
-	alarm := alarmAction{time:TIMEOUTTIME}
-	actions = append(actions, alarm)
-
-	// TODO:: Check if empty heartbeat append request here
-
 	switch(server.myState) {
 		case LEADER:
 			// mystate == leader && term == currentTerm, this is impossible, as two leaders will never be elected at any term
@@ -239,14 +236,22 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 		case CANDIDATE:
 			// Convert to follower if current state is candidate/leader
 			server.myState = FOLLOWER
+			// continue flow to next case
+			fallthrough
+		case FOLLOWER:
+			// Reset heartbeat timeout
+			alarm := alarmAction{time:TIMEOUTTIME}
+			actions = append(actions, alarm)
+
+			// TODO:: Check if empty heartbeat append request here
+
 			if server.currentTerm < event.term {
 				// This server term is not so up-to-date, so update
 				server.currentTerm 	= event.term
 				server.votedFor		= -1
+				//fmt.Printf("\nUPDATING\n\n")
 			}
-			// continue flow to next case
-			fallthrough
-		case FOLLOWER:
+
 			if ( server.getLastLog().index < event.prevLogIndex || server.log[event.prevLogIndex].term != event.prevLogTerm ) {
 				// Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
 				appendResp := appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:false}
