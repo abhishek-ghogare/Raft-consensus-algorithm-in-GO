@@ -115,7 +115,7 @@ type ServerState struct {
 
     // Non-persistent state
     commitIndex     int         // initialised to -1
-    // TODO:: lastApplied
+    lastApplied     int
     nextIndex       []int
     matchIndex      []int
     myState         int         // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
@@ -141,7 +141,7 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
     server.myState      = state
 
 
-    for i := int(0); i < numberOfNodes; i++ {
+    for i := 0; i < numberOfNodes; i++ {
         server.nextIndex[i]     = 0
         server.matchIndex[i]    = 0
     }
@@ -151,6 +151,30 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
 func (server *ServerState) getLastLog () LogEntry {
     return server.log[len(server.log) - 1]
 }
+
+// Broadcast an event, returns array of actions
+func (server *ServerState) broadcast ( event interface{}) []interface{} {
+    actions     := make([]interface{}, 0)
+    action      := sendAction {toId : -1, event : event }   // Sending to -1, -1 is for broadcast
+    actions      = append(actions, action)
+    return actions
+}
+
+// Initialise leader state
+func (server *ServerState) initialiseLeader () {
+    // become leader
+    server.myState                      = LEADER
+    server.matchIndex                   = make([]int, server.numberOfNodes)
+    server.nextIndex                    = make([]int, server.numberOfNodes)
+    server.matchIndex[server.server_id] = server.getLastLog().index
+
+    // initialise nextIndex
+    for i:=0 ; i<server.numberOfNodes ; i++ {
+        server.nextIndex[i] = server.getLastLog().index+1
+    }
+}
+
+
 
 /********************************************************************
  *                                                                  *
@@ -262,27 +286,18 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
                     return actions
                 } else if count > server.numberOfNodes/2 {
                     // become leader
-                    server.myState      = LEADER
-                    server.matchIndex   = make([]int, server.numberOfNodes)
-                    server.nextIndex    = make([]int, server.numberOfNodes)
-                    server.matchIndex[server.server_id] = server.getLastLog().index
+                    server.initialiseLeader()
 
-                    // Send empty appendRequests
-                    for i:=0 ; i<server.numberOfNodes ; i++ {
-                        server.nextIndex[i] = server.getLastLog().index+1
-
-                        if i != server.server_id {
-                            event1      := appendRequestEvent{
+                    appendReq   := appendRequestEvent{
                                             fromId          : server.server_id, 
                                             term            : server.currentTerm, 
                                             prevLogIndex    : server.getLastLog().index, 
                                             prevLogTerm     : server.getLastLog().term, 
                                             entries         : []LogEntry{}, 
                                             leaderCommit    : server.commitIndex}
-                            action      := sendAction {toId : i, event : event1 }
-                            actions      = append(actions, action)
-                        }
-                    }
+
+                    appendReqActions    := server.broadcast(appendReq)
+                    actions              = append(actions, appendReqActions...)  
                 }
             }
     }
@@ -429,17 +444,10 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
             sort.IntSlice(sorted).Sort() // sort in ascending order
             // If there exists an N such that N > commitIndex, a majority
             // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-            // set commitIndex = N .
-            //fmt.Printf("\n\nSorted matchindices : %v\n\n", sorted)
-            //fmt.Printf("\n\nLOG ENTRIES ---------------------------------------\n : %v\n\n", server.log)
+            // set commitIndex = N
             for i := server.numberOfNodes/2; i >= 0 ; i-- {
-                // First N/2+1 of sorted matchindex
-                // slice all are less than or equal to a majority of
-                // matchindices
 
-                //fmt.Printf("\nsorted[i]: %v ::: currterm: %v", sorted[i], server.currentTerm)
                 if sorted[i] > server.commitIndex && server.log[sorted[i]].term == server.currentTerm {
-                    
                     // Commit all not committed eligible entries
                     for k:=server.commitIndex+1 ; k<=sorted[i] ; k++ {
                         action := commitAction { 
@@ -477,42 +485,35 @@ func (server *ServerState) timeout ( event timeoutEvent ) []interface{} {
     switch(server.myState) {
         case LEADER:
             // Send empty appendRequests
-            for i:=0 ; i<server.numberOfNodes ; i++ {
 
-                if i != server.server_id {
-                    event1      := appendRequestEvent{
+            heartbeatEvent      := appendRequestEvent{
                                     fromId          : server.server_id, 
                                     term            : server.currentTerm, 
                                     prevLogIndex    : server.getLastLog().index, 
                                     prevLogTerm     : server.getLastLog().term, 
                                     entries         : []LogEntry{}, 
                                     leaderCommit    : server.commitIndex}
-                    action      := sendAction {toId : i, event : event1 }
-                    actions      = append(actions, action)
-                }
-            }
+            heartbeatAction     := server.broadcast(heartbeatEvent)        // broadcast request vote event
+            actions              = append(actions, heartbeatAction...)
         case CANDIDATE:
             // Restart election
             fallthrough
         case FOLLOWER:
             // Start election
-            server.myState = CANDIDATE
-            server.votedFor = server.server_id
+            server.myState      = CANDIDATE
+            server.currentTerm  = server.currentTerm+1
+            server.votedFor     = server.server_id
+            actions             = append(actions, alarmAction{time:TIMEOUTTIME} )
             server.receivedVote[server.server_id] = server.currentTerm  // voting to self
 
-            // Vote request to all
-            for i:=0 ; i<server.numberOfNodes ; i++ {
 
-                if i != server.server_id {
-                    event1      := requestVoteEvent{
-                                    fromId          : server.server_id, 
-                                    term            : server.currentTerm, 
-                                    lastLogIndex    : server.getLastLog().index, 
-                                    lastLogTerm     : server.getLastLog().term}
-                    action      := sendAction {toId : i, event : event1 }
-                    actions      = append(actions, action)
-                }
-            }
+            voteReq     := requestVoteEvent{
+                            fromId          : server.server_id, 
+                            term            : server.currentTerm, 
+                            lastLogIndex    : server.getLastLog().index, 
+                            lastLogTerm     : server.getLastLog().term}
+            voteReqActions  := server.broadcast(voteReq)        // broadcast request vote event
+            actions          = append(actions, voteReqActions...)
     }
     return actions
 }
@@ -542,14 +543,14 @@ func (server *ServerState) appendClientRequest ( event appendEvent ) []interface
             for i:=0 ; i<server.numberOfNodes ; i++ {
 
                 if i != server.server_id {
-                    event1      := appendRequestEvent{
+                    appendReq   := appendRequestEvent{
                                     fromId          : server.server_id, 
                                     term            : server.currentTerm, 
                                     prevLogIndex    : server.getLastLog().index, 
                                     prevLogTerm     : server.getLastLog().term, 
                                     entries         : logs, 
                                     leaderCommit    : server.commitIndex}
-                    action      := sendAction {toId : i, event : event1 }
+                    action      := sendAction {toId : i, event : appendReq }
                     actions      = append(actions, action)
                 }
             }
