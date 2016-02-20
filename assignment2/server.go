@@ -1,7 +1,7 @@
 package main
 
 import (
-	//"fmt"
+	"fmt"
 	//"net"
 	//"strings"
 	//"bufio"
@@ -265,6 +265,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 					// There are entries from last leaders
 					// Strip them up to the end
 					server.log = server.log[:event.prevLogIndex+1]
+					fmt.Printf("")
 				/*
 				} else {
 					// No need to append, duplecate append request
