@@ -256,13 +256,14 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
                 }
                 count   := 0
                 ncount  := 0
-                for vote := range server.receivedVote {
+                for _,vote := range server.receivedVote {
                     if vote == event.term {
                         count++
                     } else if vote == -event.term {
                         ncount++
                     }
                 }
+                //fmt.Printf("eventTerm:%v\n COUNTING : %v : %v : %v\n",event.term, count,ncount, server.receivedVote)
 
                 if ncount > server.numberOfNodes/2 {
                     // majority of -ve votes, so change to follower
