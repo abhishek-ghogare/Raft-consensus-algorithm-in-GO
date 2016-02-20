@@ -123,10 +123,16 @@ type ServerState struct {
     log         []LogEntry
 
     // Non-persistent state
-    commitIndex int         // initialised to -1
-    nextIndex   []int
-    matchIndex  []int
-    myState     int         // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
+    commitIndex     int         // initialised to -1
+    // TODO:: lastApplied
+    nextIndex       []int
+    matchIndex      []int
+    myState         int         // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
+
+    // maintain received votes from other nodes, 
+    // if vote received, set corresponding value to term for which the vote has received
+    // -ve value represents negative vote
+    receivedVote    []int
 }
 
 func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
@@ -140,6 +146,7 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
     server.commitIndex  = -1
     server.nextIndex    = make([]int, numberOfNodes)
     server.matchIndex   = make([]int, numberOfNodes)
+    server.receivedVote = make([]int, numberOfNodes)
     server.myState      = state
 
 
@@ -209,6 +216,86 @@ func (server *ServerState) voteRequest ( event requestVoteEvent ) []interface{} 
 }
 
 
+
+/********************************************************************
+ *                                                                  *
+ *                      Vote Request Response                       *
+ *                                                                  *
+ ********************************************************************/
+func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []interface{} {
+
+    actions := make([]interface{}, 0)
+
+    if server.currentTerm < event.term {
+        // This server term is not so up-to-date, so update
+        server.myState      = FOLLOWER
+        server.currentTerm  = event.term
+        server.votedFor     = -1
+        return actions
+    } else if server.currentTerm > event.term {
+        // Simply drop the response
+        return actions
+    }
+
+    switch(server.myState) {
+        case LEADER, FOLLOWER:
+            return actions
+
+        case CANDIDATE:
+            // Refer comments @ receivedVote declaration
+            vote := server.receivedVote[event.fromId]
+            if vote < 0 {
+                vote = -vote
+            }
+
+            if vote < event.term {
+                if event.voteGranted {
+                    server.receivedVote[event.fromId] = event.term
+                } else {
+                    server.receivedVote[event.fromId] = -event.term
+                }
+                count   := 0
+                ncount  := 0
+                for vote := range server.receivedVote {
+                    if vote == event.term {
+                        count++
+                    } else if vote == -event.term {
+                        ncount++
+                    }
+                }
+
+                if ncount > server.numberOfNodes/2 {
+                    // majority of -ve votes, so change to follower
+                    server.myState = FOLLOWER
+                    return actions
+                } else if count > server.numberOfNodes/2 {
+                    // become leader
+                    server.myState      = LEADER
+                    server.matchIndex   = make([]int, server.numberOfNodes)
+                    server.nextIndex    = make([]int, server.numberOfNodes)
+                    server.matchIndex[server.server_id] = server.getLastLog().index
+                    // Send empty appendRequests
+                    for i:=0 ; i<server.numberOfNodes ; i++ {
+                        server.nextIndex[i] = server.getLastLog().index+1
+
+                        if i != server.server_id {
+                            event1      := appendRequestEvent{
+                                            fromId          : server.server_id, 
+                                            term            : server.currentTerm, 
+                                            prevLogIndex    : server.getLastLog().index, 
+                                            prevLogTerm     : server.getLastLog().term, 
+                                            entries         : []LogEntry{}, 
+                                            leaderCommit    : server.commitIndex}
+                            action      := sendAction {toId : i, event : event1 }
+                            actions      = append(actions, action)
+                        }
+                    }
+                }
+            }
+    }
+
+    return actions
+}
 
 /********************************************************************
  *                                                                  *
@@ -370,6 +457,7 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
 }
 
 
+
 /********************************************************************
  *                                                                  *
  *                          Process event                           *
@@ -389,6 +477,7 @@ func (server *ServerState) processEvent ( event interface{} ) []interface{} {
             return server.voteRequest(event.(requestVoteEvent))
             break;
         case requestVoteRespEvent:
+            return server.voteRequestResponse(event.(requestVoteRespEvent))
             break;
     }
 
