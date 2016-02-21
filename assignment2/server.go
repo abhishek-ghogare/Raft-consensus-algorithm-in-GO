@@ -13,7 +13,7 @@ import (
 	//"time"
     //"sync"
     //"sync/atomic"
-	"reflect"
+	//"reflect"
 )
 
 
@@ -49,11 +49,12 @@ type appendRequestEvent struct {
 	leaderId 		int64
 	prevLogIndex	int64
 	prevLogTerm		int64
-	entries			LogEntry
+	entries			[]LogEntry
 	leaderCommit	int64
 }
 
 type appendRequestRespEvent struct {
+	// TODO :: add last appended index, so that to update on leader side the matchIndex
 	fromId		int64
 	term 		int64
 	success		bool
@@ -209,9 +210,8 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 
 	actions := make([]interface{}, 0)
 
-	if ( event.term < server.currentTerm ) {
-		// This node is not so modern
-		// or election has started and this server is in candidate state
+	if server.currentTerm > event.term {
+		// Append request is not from latest leader
 		// In all states applicable
 		appendResp := appendRequestRespEvent{fromId:server.server_id , term:server.currentTerm, success:false}
 		resp := sendAction{toId:event.fromId , event:appendResp}
@@ -223,25 +223,31 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 	alarm := alarmAction{time:TIMEOUTTIME}
 	actions = append(actions, alarm)
 
-	// This server term is not so up-to-date, so update
-	server.currentTerm = event.term
+	// TODO:: Check if empty heartbeat append request here
 
 	switch(server.myState) {
 		case LEADER:
-			// mystate == leader && term == currentTerm, this is impossible, as no two leaders will be elected at any term
+			// mystate == leader && term == currentTerm, this is impossible, as two leaders will never be elected at any term
 			if ( event.term == server.currentTerm ) {
 				appendResp := appendRequestRespEvent{fromId:server.server_id, term:-1, success:false}
 				resp := sendAction{toId:event.fromId , event:appendResp}
 				actions = append(actions, resp)
 				return actions
 			}
-			// continue flow to next case
+			// continue flow to next case for server.currentTerm < event.term
+			fallthrough
 		case CANDIDATE:
 			// Convert to follower if current state is candidate/leader
 			server.myState = FOLLOWER
+			if server.currentTerm < event.term {
+				// This server term is not so up-to-date, so update
+				server.currentTerm 	= event.term
+				server.votedFor		= -1
+			}
 			// continue flow to next case
+			fallthrough
 		case FOLLOWER:
-			if ( int64(len(server.log)-1) < event.prevLogIndex || server.log[event.prevLogIndex].term != event.prevLogTerm ) {
+			if ( server.getLastLog().index < event.prevLogIndex || server.log[event.prevLogIndex].term != event.prevLogTerm ) {
 				// Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
 				appendResp := appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:false}
 				resp := sendAction{toId:event.fromId , event:appendResp}
@@ -249,42 +255,40 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 				return actions
 			}
 
-			if( int64(len(server.log)-1) > event.prevLogIndex ) {
-				if ( server.log[event.prevLogIndex+1].term != event.entries.term ) {
-					// There are garbage entries from last leaders
+			if( server.getLastLog().index > event.prevLogIndex ) {
+				//if ( server.log[event.prevLogIndex].term != event.entries[0].term ) {
+					// There are entries from last leaders
 					// Strip them up to the end
-					server.log = server.log[:event.prevLogIndex]
+					server.log = server.log[:event.prevLogIndex+1]
+				/*
 				} else {
 					// No need to append, duplecate append request
 					server.log = server.log[:event.prevLogIndex+1]	// Trimming remaining entries
 					appendResp := appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:true}
 					resp := sendAction{toId:event.fromId , event:appendResp}
 					actions = append(actions, resp)
-					return actions
-				}
+					return actions*/
+				//}
 			}
 
 			// Update log if entries are not present
-			server.log = append(server.log, LogEntry{term:event.entries.term, index:event.entries.index})
+			server.log = append(server.log, event.entries...)
 
 			if ( event.leaderCommit > server.commitIndex ) {
 				// If leader has commited entries, so should this server
-				if event.leaderCommit > int64(len(server.log)-1) {
+				if event.leaderCommit < int64(len(server.log)-1) {
 					server.commitIndex = event.leaderCommit
 				} else {
 					server.commitIndex = int64(len(server.log)-1)
 				}
 			}
-
-			appendResp := appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:true}
-			resp := sendAction{toId:event.fromId , event:appendResp}
-			actions = append(actions, resp)
-			return actions
-			break
 	}
 
-	// TODO: handle this last return
-	return nil
+	// TODO: do commit operations
+	appendResp := appendRequestRespEvent{fromId:server.server_id, term:server.currentTerm, success:true}
+	resp := sendAction{toId:event.fromId , event:appendResp}
+	actions = append(actions, resp)
+	return actions
 }
 
 
@@ -296,16 +300,16 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 func (server *ServerState) processEvent ( event interface{} ) []interface{} {
 	// Initialise the variables and timeout
 
-	switch(reflect.TypeOf(event).String()) {
-		case "appendRequestEvent":
+	switch event.(type) {
+		case appendRequestEvent:
 			return server.appendRequest(event.(appendRequestEvent))
 			break;
-		case "appendRequestRespEvent":
+		case appendRequestRespEvent:
 			break;
-		case "requestVoteEvent":
+		case requestVoteEvent:
 			return server.voteRequest(event.(requestVoteEvent))
 			break;
-		case "requestVoteRespEvent":
+		case requestVoteRespEvent:
 			break;
 	}
 
