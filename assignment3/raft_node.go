@@ -1,9 +1,20 @@
 package main
 
 import (
+    "encoding/gob"
+    "strconv"
     "fmt"
     "github.com/cs733-iitb/cluster"
+    "math/rand"
+    "reflect"
+    "time"
 )
+
+// Debugging tools
+func (rn *RaftNode) prnt(format string, args ...interface{}) {
+  fmt.Printf("[NODE:" + strconv.Itoa(rn.server_state.server_id) + "] " + format + "\n", args...)
+}
+
 
 // data goes in via Append, comes out as CommitInfo from the node's CommitChannel
 // Index is valid only if err == nil
@@ -32,9 +43,11 @@ type Config struct {
 type RaftNode struct { // implements Node interface
     eventCh         chan interface{}
     timeoutCh       chan interface{}
-    config          Config
+    //config          Config
+    LogDir          string          // Log file directory for this node
     server_state    ServerState
-    myServer        cluster.Server
+    clusterServer   cluster.Server
+    timer           *time.Timer
     /*// Node's id
     func Id() int {
         return config.Id
@@ -57,7 +70,7 @@ type RaftNode struct { // implements Node interface
 }
 
 // Returns a Node object
-func NewRaftNode(config Config) RaftNode {
+func NewRaftNode(config Config) *RaftNode {
     var peers []cluster.PeerConfig
     for _,nodeNetAddr := range config.NodeNetAddrList {
         peers = append(peers, cluster.PeerConfig{Id: nodeNetAddr.Id, Address: fmt.Sprintf("%v:%v", nodeNetAddr.Host, nodeNetAddr.Port)})
@@ -66,10 +79,93 @@ func NewRaftNode(config Config) RaftNode {
     config1 := cluster.Config { Peers: peers }
     server1, _ := cluster.New(config.Id, config1)
 
-    var server ServerState
-    server.setupServer ( FOLLOWER, len(config.NodeNetAddrList) )
+    var server_state ServerState
+    server_state.setupServer ( FOLLOWER, len(config.NodeNetAddrList) )
+    server_state.electionTimeout     = config.ElectionTimeout
+    server_state.heartbeatTimeout    = config.HeartbeatTimeout
+    server_state.server_id           = config.Id
 
-    raft := RaftNode{config:config, server_state:server, myServer:server1}
+    raft := RaftNode{
+                        //config              : config, 
+                        server_state        : server_state, 
+                        clusterServer       : server1,
+                        eventCh             : make(chan interface{}),
+                        timeoutCh           : make(chan interface{}),
+                        LogDir              : config.LogDir }
+    return &raft
+}
 
-    return raft
+// Client's message to Raft node
+func (rn *RaftNode) Append(data []byte) {
+                //fmt.Println("channel in append ", &rn.eventCh)
+    rn.eventCh <- appendEvent{data: data}
+                //fmt.Printf("Hello\n")
+}
+
+func (rn *RaftNode) processEvents() {
+    RegisterEncoding()
+    rn.timer = time.AfterFunc(time.Duration(500 +rand.Intn(100))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+
+    rn.prnt("Timer started")
+    for {
+        var ev interface{}
+                //fmt.Println("channel in process events ",rn.config.Id, &rn.eventCh)
+        select {
+        case ev = <- rn.eventCh :
+            rn.prnt("Append request received")
+            actions := rn.server_state.processEvent(ev)
+            rn.doActions(actions)
+        case ev = <- rn.timeoutCh :
+            rn.prnt("Timeout event received")
+            actions := rn.server_state.processEvent(ev)
+            rn.doActions(actions)
+            //ev = timeoutEvent{}
+        case ev = <- rn.clusterServer.Inbox() :
+            ev := ev.(*cluster.Envelope)
+            rn.prnt("Event of type %v received from %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid)
+            event := ev.Msg.(interface{})
+            actions := rn.server_state.processEvent(event)
+            rn.doActions(actions)
+        default:
+            //fmt.Printf("Hello %v\n", rn.config.Id)
+            //rn.eventCh <- timeoutEvent{}
+        }
+    }
+}
+
+func (rn *RaftNode) doActions(actions [] interface{}) {
+
+    //var timer *Timer
+
+    for _,action := range actions {
+        switch action.(type) {
+        case sendAction :
+            action := action.(sendAction)
+            rn.prnt("sendAction type %v to %v", reflect.TypeOf(action.event).Name(), action.toId)
+            if action.toId == -1 {
+                rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:cluster.BROADCAST, Msg:action.event}
+            } else {
+                rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:action.toId, Msg:action.event}
+            }
+        case commitAction :
+            rn.prnt("commitAction received")
+        case logStore :
+            rn.prnt("logStore received")
+        case alarmAction :
+            rn.prnt("alarmAction received")
+            action := action.(alarmAction)
+            //timer =
+            rn.timer = time.AfterFunc(time.Duration(action.time +rand.Intn(100))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+        }
+    }
+}
+
+func RegisterEncoding () {
+    gob.Register(appendRequestEvent{})
+    gob.Register(appendRequestRespEvent{})
+    gob.Register(requestVoteEvent{})
+    gob.Register(requestVoteRespEvent{})
+    //gob.Register(timeoutEvent{})
+    gob.Register(appendEvent{})
+    gob.Register(LogEntry{})
 }
