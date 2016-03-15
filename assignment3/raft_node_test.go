@@ -8,7 +8,7 @@ import (
 
 // Debugging tools
 func prnt(format string, args ...interface{}) {
-  fmt.Printf("[TEST]   " + format + "\n", args...)
+  fmt.Printf("[TEST] \t: " + format + "\n", args...)
 }
 
 func makeRafts() []*RaftNode {
@@ -23,7 +23,7 @@ func makeRafts() []*RaftNode {
 	    NodeNetAddrList 	:nodeNetAddrList,
 	    Id                  :1,
 	    LogDir              :"log file",          // Log file directory for this node
-	    ElectionTimeout     :500,
+	    ElectionTimeout     :1000,
 	    HeartbeatTimeout    :500}
 
 	var rafts []*RaftNode
@@ -56,24 +56,28 @@ func getLeader(rafts []*RaftNode) (*RaftNode, string) {
 }
 
 func TestBasic (t *testing.T) {
-
 	rafts := makeRafts() // array of []RaftNode
 	prnt("Rafts created")
-	time.Sleep(10*time.Second)
+	time.Sleep(5*time.Second)
 	ldr, err := getLeader(rafts)
 	if err!="" {
 		t.Fatal(err)
 	}
+	prnt("Leader found : %v", ldr.server_state.server_id)
 
 	ldr.Append([]byte("foo"))
+	//ldr.Append([]byte("bar"))
+	time.Sleep(2*time.Second)
+	//ldr.Append([]byte("foo1"))
+	//time.Sleep(2*time.Second)
 	for _, node:= range rafts {
 		select {
 		// to avoid blocking on channel.
 		case ci := <- node.CommitChannel:
-			if ci.Err != nil {
-				t.Fatal(ci.Err)
+			if ci.err != "" {
+				t.Fatal(ci.err)
 			}
-			if string(ci.Data) != "foo" {
+			if string(ci.data) != "foo" {
 				t.Fatal("Got different data")
 			}
 		default: 

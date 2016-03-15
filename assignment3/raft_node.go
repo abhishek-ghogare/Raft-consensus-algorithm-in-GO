@@ -12,17 +12,7 @@ import (
 
 // Debugging tools
 func (rn *RaftNode) prnt(format string, args ...interface{}) {
-  fmt.Printf("[NODE:" + strconv.Itoa(rn.server_state.server_id) + "] " + format + "\n", args...)
-}
-
-
-// data goes in via Append, comes out as CommitInfo from the node's CommitChannel
-// Index is valid only if err == nil
-type AppendResp struct {
-    Data  []byte
-    Index int       // or int .. whatever you have in your code
-    Err   error
-    // Err can be errred
+  fmt.Printf(strconv.Itoa(rn.server_state.currentTerm) + " [NODE\t: " + strconv.Itoa(rn.server_state.server_id) + "] \t" + format + "\n", args...)
 }
 
 type NodeNetAddr struct {
@@ -55,7 +45,7 @@ type RaftNode struct { // implements Node interface
     // Id of leader. -1 if unknown
     LeaderId int 
     // A channel for client to listen on. What goes into Append must come out of here at some point.
-    CommitChannel chan AppendResp
+    CommitChannel chan commitAction
     // Last known committed index in the log.  This could be -1 until the system stabilizes.
     /*func CommittedIndex int {
         return server_state.commitIndex
@@ -91,6 +81,7 @@ func NewRaftNode(config Config) *RaftNode {
                         clusterServer       : server1,
                         eventCh             : make(chan interface{}),
                         timeoutCh           : make(chan interface{}),
+                        CommitChannel       : make(chan commitAction,200),
                         LogDir              : config.LogDir }
     return &raft
 }
@@ -104,25 +95,39 @@ func (rn *RaftNode) Append(data []byte) {
 
 func (rn *RaftNode) processEvents() {
     RegisterEncoding()
-    rn.timer = time.AfterFunc(time.Duration(500 +rand.Intn(100))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+    rn.timer = time.AfterFunc(time.Duration(rn.server_state.heartbeatTimeout +rand.Intn(100))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
 
     rn.prnt("Timer started")
     for {
         var ev interface{}
                 //fmt.Println("channel in process events ",rn.config.Id, &rn.eventCh)
         select {
-        case ev = <- rn.eventCh :
-            rn.prnt("Append request received")
-            actions := rn.server_state.processEvent(ev)
-            rn.doActions(actions)
         case ev = <- rn.timeoutCh :
             rn.prnt("Timeout event received")
             actions := rn.server_state.processEvent(ev)
             rn.doActions(actions)
-            //ev = timeoutEvent{}
+        //ev = timeoutEvent{}
+        case ev = <- rn.eventCh :
+            rn.prnt("Append request received")
+            actions := rn.server_state.processEvent(ev)
+            rn.doActions(actions)
         case ev = <- rn.clusterServer.Inbox() :
             ev := ev.(*cluster.Envelope)
-            rn.prnt("Event of type %v received from %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid)
+
+            // Debug logging
+            switch ev.Msg.(type) {
+            case appendRequestEvent:
+                rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+            case appendRequestRespEvent:
+                rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+            case requestVoteEvent :
+                //rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+            case requestVoteRespEvent :
+                //rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+            }
+
+            //rn.prnt("InboxEvent  : from %v \"%v\" \t\t%v", ev.Pid, reflect.TypeOf(ev.Msg).Name(), ev)
+            //reflect.TypeOf(ev.Msg).Name()
             event := ev.Msg.(interface{})
             actions := rn.server_state.processEvent(event)
             rn.doActions(actions)
@@ -141,21 +146,40 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
         switch action.(type) {
         case sendAction :
             action := action.(sendAction)
-            rn.prnt("sendAction type %v to %v", reflect.TypeOf(action.event).Name(), action.toId)
+
+            // Debug logging
+            switch action.event.(type) {
+            case appendRequestEvent:
+                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+            case appendRequestRespEvent:
+                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+            case requestVoteEvent :
+                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+            case requestVoteRespEvent :
+                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+            }
+            //rn.prnt("OutboxEvent : to   %v \"%v\"\t\t%v", action.toId, reflect.TypeOf(action.event).Name(), action.event)
+
+
             if action.toId == -1 {
                 rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:cluster.BROADCAST, Msg:action.event}
             } else {
                 rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:action.toId, Msg:action.event}
             }
         case commitAction :
-            rn.prnt("commitAction received")
+            rn.prnt("commitAction received %v", action)
+            action := action.(commitAction)
+            rn.CommitChannel <- action
         case logStore :
             rn.prnt("logStore received")
         case alarmAction :
-            rn.prnt("alarmAction received")
+            rn.prnt("==== %25v", "resetting alarm")
             action := action.(alarmAction)
+            rn.timer.Stop()
             //timer =
-            rn.timer = time.AfterFunc(time.Duration(action.time +rand.Intn(100))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+            rn.timer = time.AfterFunc(time.Duration(action.time)*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+        default:
+
         }
     }
 }

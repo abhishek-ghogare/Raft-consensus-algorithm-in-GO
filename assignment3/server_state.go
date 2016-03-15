@@ -2,10 +2,18 @@ package main
 
 import (
     "sort"
+    "fmt"
+    "strconv"
+"math/rand"
 )
 
 
-var TIMEOUTTIME = int(1000);  // Timeout in ms
+// Debugging tools
+func (server_state *ServerState) prnt(format string, args ...interface{}) {
+    fmt.Printf(strconv.Itoa(server_state.currentTerm) + " [RSM\t: " + strconv.Itoa(server_state.server_id) + "] \t" + format + "\n", args...)
+}
+
+//var TIMEOUTTIME = int(100);  // Timeout in ms
 
 const (
     CANDIDATE=0;
@@ -24,6 +32,7 @@ const (
 type LogEntry struct {
     Term  int
     Index int
+    Data  []byte
 }
 
 /********************************************************************
@@ -81,6 +90,8 @@ type sendAction struct {
     event   interface{}
 }
 
+// data goes in via Append, comes out as CommitInfo from the node's CommitChannel
+// Index is valid only if err == nil
 type commitAction struct {
     index   int       // for error, set to -1
     data    []byte
@@ -102,6 +113,7 @@ type alarmAction struct {
  *                          Server status                           *
  *                                                                  *
  ********************************************************************/
+// {0 1 0 11 [{0 0} {0 1} {0 2} {1 3} {1 4}] 2 0 [5 0 5 5 5 5 5 5 5 5 5 1] [4 1 1 1 1 1 1 1 1 1 1 1] 2 [0 0 0 0 0 0 0 0 0 0 0 0] 0 0}
 type ServerState struct {
     // Persistent state
     server_id       int
@@ -127,6 +139,7 @@ type ServerState struct {
     receivedVote    []int       // Using first 0th dummy entry for all arrays
 
     // Timeouts in milliseconds
+    // TODO:: DO we need to reset alarm after state conversion?
     electionTimeout     int
     heartbeatTimeout    int
 }
@@ -137,9 +150,9 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
     server.votedFor     = -1
     server.numberOfNodes= numberOfNodes
     server.log          = make([]LogEntry, 0)
-    server.log          = append(server.log, LogEntry{Term:0, Index:0}) // Initialising log with single empty log, to make life easier in future checking
+    server.log          = append(server.log, LogEntry{Term:0, Index:0, Data:[]byte("FIRST")}) // Initialising log with single empty log, to make life easier in future checking
 
-    server.commitIndex  = -1
+    server.commitIndex  = 0
     server.nextIndex    = make([]int, numberOfNodes+1)
     server.matchIndex   = make([]int, numberOfNodes+1)
     server.receivedVote = make([]int, numberOfNodes+1)
@@ -147,8 +160,8 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
 
 
     for i := 0; i <= numberOfNodes; i++ {
-        server.nextIndex[i]     = 0
-        server.matchIndex[i]    = 0
+        server.nextIndex[i]     = 1 // TODO:: Check if this is correctly initialised
+        server.matchIndex[i]    = 1
     }
 }
 
@@ -251,6 +264,9 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
         server.myState      = FOLLOWER
         server.currentTerm  = event.Term
         server.votedFor     = -1
+
+        alarm  := alarmAction{time:server.heartbeatTimeout+500+rand.Intn(1000)} // slightly greater time to receive heartbeat
+        actions = append(actions, alarm)
         return actions
     } else if server.currentTerm > event.Term {
         // Simply drop the response
@@ -291,6 +307,8 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
                     return actions
                 } else if count > server.numberOfNodes/2 {
                     // become leader
+
+                    server.prnt("KEADER BAN GAYE %v", server.server_id)
                     server.initialiseLeader()
 
                     appendReq   := appendRequestEvent{
@@ -301,8 +319,10 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
                                             Entries         : []LogEntry{},
                                             LeaderCommit    : server.commitIndex}
 
+                    alarm  := alarmAction{time:server.heartbeatTimeout}
+                    actions = append(actions, alarm)
                     appendReqActions    := server.broadcast(appendReq)
-                    actions              = append(actions, appendReqActions...)  
+                    actions              = append(actions, appendReqActions...)
                 }
             }
     }
@@ -346,7 +366,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
             fallthrough
         case FOLLOWER:
             // Reset heartbeat timeout
-            alarm := alarmAction{time:TIMEOUTTIME}
+            alarm := alarmAction{time:server.heartbeatTimeout+500+rand.Intn(1000)} // slightly greater time to receive heartbeat
             actions = append(actions, alarm)
 
             if server.currentTerm < event.Term {
@@ -355,6 +375,18 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 server.votedFor     = -1
                 //fmt.Printf("\nUPDATING\n\n")
             }
+
+
+            // HERTBEAT check disabled
+            /*
+            // Not required to check the last log index for heartbeat event
+            if len(event.Entries) == 0 {
+                // Empty log entries for heartbeat
+                appendResp := appendRequestRespEvent{FromId:server.server_id, Term:server.currentTerm, Success:true, LastLogIndex:server.getLastLog().Index}
+                resp := sendAction{toId:event.FromId, event:appendResp}
+                actions = append(actions, resp)
+                return actions
+            }*/
 
             if ( server.getLastLog().Index < event.PrevLogIndex || server.log[event.PrevLogIndex].Term != event.PrevLogTerm ) {
                 // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
@@ -370,27 +402,36 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 server.log = server.log[:event.PrevLogIndex +1]
             }
 
-            if len(event.Entries) == 0 {
-                // Empty log entries for heartbeat
-                return actions
-            } else {
-                // Update log if entries are not present
-                server.log = append(server.log, event.Entries...)
-    
-                for _, log := range event.Entries {
-                    action := logStore{ index: log.Index, data:[]byte{}}
-                    actions = append(actions,action)
-                }
-    
-                if ( event.LeaderCommit > server.commitIndex ) {
-                    // If leader has commited entries, so should this server
-                    if event.LeaderCommit < int(len(server.log)-1) {
-                        server.commitIndex = event.LeaderCommit
-                    } else {
-                        server.commitIndex = int(len(server.log)-1)
-                    }
-                }
+
+            // Update log if entries are not present
+            server.log = append(server.log, event.Entries...)
+
+            for _, log := range event.Entries {
+                action := logStore{ index: log.Index, data:[]byte{}}
+                actions = append(actions,action)
             }
+
+            //server.prnt("$$$$$$$$$$$$ Checking commits Leader:%v server:%v", event.LeaderCommit, server.commitIndex)
+            if ( event.LeaderCommit > server.commitIndex ) {
+                var commitFrom, commitUpto int
+                // If leader has commited entries, so should this server
+                if event.LeaderCommit < int(len(server.log)-1) {
+                    commitFrom = server.commitIndex+1
+                    commitUpto = event.LeaderCommit
+                } else {
+                    commitFrom = server.commitIndex+1
+                    commitUpto = int(len(server.log)-1)
+                }
+
+                // commit all logs from commitFrom to commitUpto
+                for i:=commitFrom ; i<=commitUpto ; i++ {
+                    action := commitAction{index:i, data:server.log[i].Data, err:""}
+                    actions = append(actions,action)
+                    server.prnt("Commiting index %v, data:%v",i,string(server.log[i].Data))
+                }
+                server.commitIndex = commitUpto
+            }
+
     }
 
     appendResp := appendRequestRespEvent{FromId:server.server_id, Term:server.currentTerm, Success:true, LastLogIndex:server.getLastLog().Index}
@@ -416,6 +457,10 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
         server.myState      = FOLLOWER
         server.currentTerm  = event.Term
         server.votedFor     = -1
+
+        // reset alarm
+        alarm := alarmAction{time:server.heartbeatTimeout+500+rand.Intn(1000)} // slightly greater time to receive heartbeat
+        actions = append(actions, alarm)
         return actions
     }
 
@@ -423,7 +468,13 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
         case LEADER:
             if ! event.Success {
                 // there are holes in follower's log
-                server.nextIndex[event.FromId] = server.nextIndex[event.FromId] - 1
+
+                // TODO::check for  event.LastLogIndex + 1
+                //if event.LastLogIndex < server.nextIndex[event.FromId] {
+                //  TODO:: fix issue here
+                    server.nextIndex[event.FromId] = event.LastLogIndex + 1
+                    //server.prnt("THIS is index %v", server)
+                //}
 
                 // Resend all logs from the holes to the end
                 prevLog     := server.log[server.nextIndex[event.FromId]-1]
@@ -441,29 +492,30 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
                 return actions
             } else if event.LastLogIndex > server.matchIndex[event.FromId] {
                 server.matchIndex[event.FromId] = event.LastLogIndex
-            }
 
-            // lets sort
-            sorted := append([]int{}, server.matchIndex...)
-            //matchCopy = []int{4,3,7,9,1,6}
-            sort.IntSlice(sorted).Sort() // sort in ascending order
-            // If there exists an N such that N > commitIndex, a majority
-            // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-            // set commitIndex = N
-            for i := server.numberOfNodes/2; i >= 0 ; i-- {
+                // lets sort
+                sorted := append([]int{}, server.matchIndex[1:]...)
+                //matchCopy = []int{4,3,7,9,1,6}
+                sort.IntSlice(sorted).Sort() // sort in ascending order
+                // If there exists an N such that N > commitIndex, a majority
+                // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+                // set commitIndex = N
+                //server.prnt("$$$$$$$$$$$$$$$$$$$ Sorted array: %v", sorted)
+                for i := server.numberOfNodes/2; i >= 0 ; i-- {
+                    if sorted[i] > server.commitIndex && server.log[sorted[i]].Term == server.currentTerm {
+                        //server.prnt("$$$$$$$$$$$$$$$$$$$ Found eligible: %v", i)
+                        // Commit all not committed eligible entries
+                        for k:=server.commitIndex+1 ; k<=sorted[i] ; k++ {
+                            action := commitAction {
+                                        index   : k,
+                                        data    : server.log[k].Data,
+                                        err     : "" }
+                            actions = append(actions, action)
+                        }
 
-                if sorted[i] > server.commitIndex && server.log[sorted[i]].Term == server.currentTerm {
-                    // Commit all not committed eligible entries
-                    for k:=server.commitIndex+1 ; k<=sorted[i] ; k++ {
-                        action := commitAction { 
-                                    index   : k,
-                                    data    : []byte{},
-                                    err     : "" }
-                        actions = append(actions, action)
+                        server.commitIndex = sorted[i]
+                        break
                     }
-
-                    server.commitIndex = sorted[i]
-                    break
                 }
             }
 
@@ -498,8 +550,9 @@ func (server *ServerState) timeout ( event timeoutEvent ) []interface{} {
                                     PrevLogTerm     : server.getLastLog().Term,
                                     Entries         : []LogEntry{},
                                     LeaderCommit    : server.commitIndex}
-            heartbeatAction     := server.broadcast(heartbeatEvent)        // broadcast request vote event
-            actions              = append(actions, heartbeatAction...)
+            heartbeatActions    := server.broadcast(heartbeatEvent)        // broadcast request vote event
+            actions              = append(actions, heartbeatActions...)
+            actions              = append(actions, alarmAction{time:server.heartbeatTimeout} )
         case CANDIDATE:
             // Restart election
             fallthrough
@@ -508,7 +561,7 @@ func (server *ServerState) timeout ( event timeoutEvent ) []interface{} {
             server.myState      = CANDIDATE
             server.currentTerm  = server.currentTerm+1
             server.votedFor     = server.server_id
-            actions             = append(actions, alarmAction{time:TIMEOUTTIME} )
+            actions             = append(actions, alarmAction{time:server.electionTimeout+rand.Intn(1000)} )
             server.receivedVote[server.server_id] = server.currentTerm  // voting to self
 
 
@@ -537,8 +590,9 @@ func (server *ServerState) appendClientRequest ( event appendEvent ) []interface
     switch(server.myState) {
         case LEADER:
             // append to self
-            log := LogEntry{Index:server.getLastLog().Index +1, Term:server.currentTerm}
+            log := LogEntry{Index:server.getLastLog().Index +1, Term:server.currentTerm, Data:event.data}
             server.log = append(server.log, log)
+            server.matchIndex[server.server_id] = server.getLastLog().Index  // Update self matchIndex
 
             action := logStore{ index: log.Index, data:[]byte{}}
             actions = append(actions,action)
