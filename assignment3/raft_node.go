@@ -103,7 +103,7 @@ func (rn *RaftNode) processEvents() {
                 //fmt.Println("channel in process events ",rn.config.Id, &rn.eventCh)
         select {
         case ev = <- rn.timeoutCh :
-            rn.prnt("Timeout event received")
+            //rn.prnt("Timeout event received")
             actions := rn.server_state.processEvent(ev)
             rn.doActions(actions)
         //ev = timeoutEvent{}
@@ -117,13 +117,13 @@ func (rn *RaftNode) processEvents() {
             // Debug logging
             switch ev.Msg.(type) {
             case appendRequestEvent:
-                rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+                rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             case appendRequestRespEvent:
-                rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+                rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             case requestVoteEvent :
-                //rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+                //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             case requestVoteRespEvent :
-                //rn.prnt("<<-- %25v : %-14v %v", reflect.TypeOf(ev.Msg).Name(), ev.Pid, ev.Msg)
+                //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             }
 
             //rn.prnt("InboxEvent  : from %v \"%v\" \t\t%v", ev.Pid, reflect.TypeOf(ev.Msg).Name(), ev)
@@ -150,13 +150,13 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             // Debug logging
             switch action.event.(type) {
             case appendRequestEvent:
-                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
             case appendRequestRespEvent:
-                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
             case requestVoteEvent :
-                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
             case requestVoteRespEvent :
-                rn.prnt("-->> %25v : %-14v %v", reflect.TypeOf(action.event).Name(), action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
             }
             //rn.prnt("OutboxEvent : to   %v \"%v\"\t\t%v", action.toId, reflect.TypeOf(action.event).Name(), action.event)
 
@@ -167,13 +167,13 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
                 rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:action.toId, Msg:action.event}
             }
         case commitAction :
-            rn.prnt("commitAction received %v", action)
+            rn.prnt("commitAction received %+v", action)
             action := action.(commitAction)
             rn.CommitChannel <- action
         case logStore :
             rn.prnt("logStore received")
         case alarmAction :
-            rn.prnt("==== %25v", "resetting alarm")
+            //rn.prnt("==== %25v", "resetting alarm")
             action := action.(alarmAction)
             rn.timer.Stop()
             //timer =

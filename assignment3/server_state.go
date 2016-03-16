@@ -21,14 +21,6 @@ const (
     LEADER=2;
     )
 
-const (
-    APPREQ=0;
-    VOTEREQ=1;
-    APPRESP=2;
-    VOTERESP=3;
-    TIMEOUT=4;
-    )
-
 type LogEntry struct {
     Term  int
     Index int
@@ -160,8 +152,8 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
 
 
     for i := 0; i <= numberOfNodes; i++ {
-        server.nextIndex[i]     = 1 // TODO:: Check if this is correctly initialised
-        server.matchIndex[i]    = 1
+        server.nextIndex[i]     = 1     // Set to index of next log to send
+        server.matchIndex[i]    = 0     // Set to last log index on that server, increases monotonically
     }
 }
 
@@ -378,6 +370,8 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 
 
             // HERTBEAT check disabled
+            // It was preventing check for changed commitIndex,
+            // resulting this server not committing new entries which are committed by leader
             /*
             // Not required to check the last log index for heartbeat event
             if len(event.Entries) == 0 {
@@ -398,8 +392,15 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 
             if( server.getLastLog().Index > event.PrevLogIndex ) {
                 // There are entries from last leaders
-                // Strip them up to the end
-                server.log = server.log[:event.PrevLogIndex +1]
+                // truncate them up to the end
+                truncatedLogs := server.log[event.PrevLogIndex + 1 : ]
+                server.log     = server.log[ : event.PrevLogIndex] // TODO:: is it really prevIndex+1? it should be only prevIndex
+                server.prnt("%+v",server)
+                server.prnt("Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
+                for _, log := range truncatedLogs {
+                    action := commitAction{index:log.Index, data:log.Data, err:"Log truncated"}
+                    actions = append(actions,action)
+                }
             }
 
 
@@ -434,9 +435,13 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 
     }
 
-    appendResp := appendRequestRespEvent{FromId:server.server_id, Term:server.currentTerm, Success:true, LastLogIndex:server.getLastLog().Index}
-    resp := sendAction{toId:event.FromId, event:appendResp}
-    actions = append(actions, resp)
+    // If the append request is heartbeat then ignore responding to it
+    // We are updating matchIndex and nextIndex on positive appendRequestResponse, so consume heartbeats
+    if len(event.Entries) != 0 {
+        appendResp := appendRequestRespEvent{FromId:server.server_id, Term:server.currentTerm, Success:true, LastLogIndex:server.getLastLog().Index}
+        resp := sendAction{toId:event.FromId, event:appendResp}
+        actions = append(actions, resp)
+    }
     return actions
 }
 
@@ -468,13 +473,12 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
         case LEADER:
             if ! event.Success {
                 // there are holes in follower's log
-
                 // TODO::check for  event.LastLogIndex + 1
-                //if event.LastLogIndex < server.nextIndex[event.FromId] {
-                //  TODO:: fix issue here
+                if event.LastLogIndex < server.nextIndex[event.FromId] {
                     server.nextIndex[event.FromId] = event.LastLogIndex + 1
-                    //server.prnt("THIS is index %v", server)
-                //}
+                    //server.prnt("THIS is index nextIndex[]:%v   Event:%+v", server.nextIndex[event.FromId], event)
+                //server.nextIndex[event.FromId] -= 1
+                }
 
                 // Resend all logs from the holes to the end
                 prevLog     := server.log[server.nextIndex[event.FromId]-1]
@@ -492,6 +496,7 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
                 return actions
             } else if event.LastLogIndex > server.matchIndex[event.FromId] {
                 server.matchIndex[event.FromId] = event.LastLogIndex
+                server.nextIndex[event.FromId]  = event.LastLogIndex + 1
 
                 // lets sort
                 sorted := append([]int{}, server.matchIndex[1:]...)
@@ -589,30 +594,23 @@ func (server *ServerState) appendClientRequest ( event appendEvent ) []interface
 
     switch(server.myState) {
         case LEADER:
-            // append to self
-            log := LogEntry{Index:server.getLastLog().Index +1, Term:server.currentTerm, Data:event.data}
-            server.log = append(server.log, log)
+            log  := LogEntry{Index:server.getLastLog().Index +1, Term:server.currentTerm, Data:event.data}
+            logs := append([]LogEntry{}, log)
+
+            appendReq   := appendRequestEvent{
+                FromId          : server.server_id,
+                Term            : server.currentTerm,
+                PrevLogIndex    : server.getLastLog().Index,
+                PrevLogTerm     : server.getLastLog().Term,
+                Entries         : logs,
+                LeaderCommit    : server.commitIndex}
+
+
+            server.log = append(server.log, log)        // Append to self log
             server.matchIndex[server.server_id] = server.getLastLog().Index  // Update self matchIndex
 
-            action := logStore{ index: log.Index, data:[]byte{}}
-            actions = append(actions,action)
-
-            logs := append([]LogEntry{}, log)
-            // Send appendRequests to all
-            for i:=1 ; i<=server.numberOfNodes ; i++ {
-
-                if i != server.server_id {
-                    appendReq   := appendRequestEvent{
-                                    FromId          : server.server_id,
-                                    Term            : server.currentTerm,
-                                    PrevLogIndex    : server.getLastLog().Index,
-                                    PrevLogTerm     : server.getLastLog().Term,
-                                    Entries         : logs,
-                                    LeaderCommit    : server.commitIndex}
-                    action      := sendAction {toId : i, event : appendReq }
-                    actions      = append(actions, action)
-                }
-            }
+            actions = append(actions, logStore{ index:log.Index, data:log.Data })
+            actions = append(actions, server.broadcast(appendReq)...)
         case CANDIDATE:
         case FOLLOWER:
     }

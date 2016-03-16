@@ -58,7 +58,7 @@ func getLeader(rafts []*RaftNode) (*RaftNode, string) {
 func TestBasic (t *testing.T) {
 	rafts := makeRafts() // array of []RaftNode
 	prnt("Rafts created")
-	time.Sleep(5*time.Second)
+	time.Sleep(2*time.Second)
 	ldr, err := getLeader(rafts)
 	if err!="" {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestBasic (t *testing.T) {
 
 	ldr.Append([]byte("foo"))
 	//ldr.Append([]byte("bar"))
-	time.Sleep(2*time.Second)
+	time.Sleep(1*time.Second)
 	//ldr.Append([]byte("foo1"))
 	//time.Sleep(2*time.Second)
 	for _, node:= range rafts {
