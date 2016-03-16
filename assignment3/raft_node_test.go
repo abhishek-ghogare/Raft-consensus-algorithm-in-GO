@@ -23,8 +23,8 @@ func makeRafts() []*RaftNode {
 	    NodeNetAddrList 	:nodeNetAddrList,
 	    Id                  :1,
 	    LogDir              :"log file",          // Log file directory for this node
-	    ElectionTimeout     :1000,
-	    HeartbeatTimeout    :500}
+	    ElectionTimeout     :500,
+	    HeartbeatTimeout    :200}
 
 	var rafts []*RaftNode
 	for i:=1 ; i<=5 ; i++ {

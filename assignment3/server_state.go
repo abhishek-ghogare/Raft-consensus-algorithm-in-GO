@@ -265,7 +265,7 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
         server.currentTerm  = event.Term
         server.votedFor     = -1
 
-        alarm  := alarmAction{time:server.heartbeatTimeout+500+rand.Intn(1000)} // slightly greater time to receive heartbeat
+        alarm  := alarmAction{time:server.electionTimeout+rand.Intn(500)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
         return actions
     } else if server.currentTerm > event.Term {
@@ -366,7 +366,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
             fallthrough
         case FOLLOWER:
             // Reset heartbeat timeout
-            alarm := alarmAction{time:server.heartbeatTimeout+500+rand.Intn(1000)} // slightly greater time to receive heartbeat
+            alarm := alarmAction{time:server.electionTimeout+rand.Intn(500)} // slightly greater time to receive heartbeat
             actions = append(actions, alarm)
 
             if server.currentTerm < event.Term {
@@ -459,7 +459,7 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
         server.votedFor     = -1
 
         // reset alarm
-        alarm := alarmAction{time:server.heartbeatTimeout+500+rand.Intn(1000)} // slightly greater time to receive heartbeat
+        alarm := alarmAction{time:server.electionTimeout+rand.Intn(500)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
         return actions
     }
@@ -561,7 +561,7 @@ func (server *ServerState) timeout ( event timeoutEvent ) []interface{} {
             server.myState      = CANDIDATE
             server.currentTerm  = server.currentTerm+1
             server.votedFor     = server.server_id
-            actions             = append(actions, alarmAction{time:server.electionTimeout+rand.Intn(1000)} )
+            actions             = append(actions, alarmAction{time:server.electionTimeout+rand.Intn(500)} )
             server.receivedVote[server.server_id] = server.currentTerm  // voting to self
 
 
@@ -648,7 +648,7 @@ func (server *ServerState) processEvent ( event interface{} ) []interface{} {
             return nil
     }
 
-    return make([]interface{},0)
+    //return make([]interface{},0)
 }
 
 /*
