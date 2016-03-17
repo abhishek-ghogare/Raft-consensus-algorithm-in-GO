@@ -38,50 +38,86 @@ func makeRafts() []*RaftNode {
 	return rafts
 }
 
-func getLeader(rafts []*RaftNode) (*RaftNode, string) {
+func shutdownRafts (rafts []*RaftNode) {
+	for _, r := range rafts {
+		prnt("%+v", r)
+		r.Shutdown()
+	}
+}
+
+func getLeader(t *testing.T, rafts []*RaftNode) (*RaftNode) {
 	ldrCount:=0
 	var ldr *RaftNode
 	for _, node := range rafts {
-		if node.server_state.myState == LEADER {
+		//prnt("SERVER : %+v", node.server_state)
+		if node.IsLeader() {
 			ldrCount+=1
 			ldr = node
 		}
 	}
 
 	if ldrCount!=1 {
-		return &RaftNode{}, "Multiple/Zero leaders found"
+		t.Fatal("Multiple/Zero leaders found");
+		return &RaftNode{}
 	} else {
-		return ldr, ""
+		prnt("Leader found : %v", ldr.server_state.server_id)
+		return ldr
 	}
+}
+
+func TestLeaderReelection (t *testing.T) {
+	rafts := makeRafts() // array of []RaftNode
+	prnt("Rafts created")
+	time.Sleep(2*time.Second)
+	ldr := getLeader(t, rafts)
+	ldr.Shutdown()
+	time.Sleep(2*time.Second)
+	ldr = getLeader(t, rafts)
+	ldr.Append([]byte("foo"))
+
+	time.Sleep(3*time.Second)
+	ldr.Shutdown()
+	for _, node:= range rafts {
+		if !node.IsNodeUp() {
+			continue	// Ignore if node is down
+		}
+		select {
+		// to avoid blocking on channel.
+		case ci := <- node.CommitChannel:
+			if ci.err != "" {
+				t.Error(ci.err)
+			}
+			if string(ci.data) != "foo" {
+				t.Error("Got different data")
+			}
+		default:
+			t.Error("Expected message on all nodes")
+		}
+	}
+	shutdownRafts(rafts)
 }
 
 func TestBasic (t *testing.T) {
 	rafts := makeRafts() // array of []RaftNode
 	prnt("Rafts created")
 	time.Sleep(2*time.Second)
-	ldr, err := getLeader(rafts)
-	if err!="" {
-		t.Fatal(err)
-	}
-	prnt("Leader found : %v", ldr.server_state.server_id)
-
+	ldr:= getLeader(t, rafts)
 	ldr.Append([]byte("foo"))
-	//ldr.Append([]byte("bar"))
 	time.Sleep(1*time.Second)
-	//ldr.Append([]byte("foo1"))
-	//time.Sleep(2*time.Second)
 	for _, node:= range rafts {
 		select {
 		// to avoid blocking on channel.
 		case ci := <- node.CommitChannel:
 			if ci.err != "" {
-				t.Fatal(ci.err)
+				t.Error(ci.err)
 			}
 			if string(ci.data) != "foo" {
-				t.Fatal("Got different data")
+				t.Error("Got different data")
 			}
 		default: 
-			t.Fatal("Expected message on all nodes")
+			t.Error("Expected message on all nodes")
 		}
 	}
+	shutdownRafts(rafts)
 }
+

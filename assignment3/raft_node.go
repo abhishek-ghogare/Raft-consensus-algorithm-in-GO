@@ -11,8 +11,19 @@ import (
 )
 
 // Debugging tools
+
+const CLR_R = "\x1b[31;1m"
+const CLR_G = "\x1b[32;1m"
+const CLR_Y = "\x1b[33;1m"
+const CLR_B = "\x1b[34;1m"
+const CLR_M = "\x1b[35;1m"
+const CLR_FMT = "\x1b[3%v;1m"
+const CLR_END = "\x1b[0m"
+
 func (rn *RaftNode) prnt(format string, args ...interface{}) {
-  fmt.Printf(strconv.Itoa(rn.server_state.currentTerm) + " [NODE\t: " + strconv.Itoa(rn.server_state.server_id) + "] \t" + format + "\n", args...)
+  fmt.Printf( fmt.Sprintf(CLR_FMT, rn.GetId()) +
+  strconv.Itoa(rn.server_state.currentTerm) +
+  " [NODE\t: " + strconv.Itoa(rn.GetId()) + "] \t" + format + "\n" + CLR_END, args...)
 }
 
 type NodeNetAddr struct {
@@ -45,7 +56,10 @@ type RaftNode struct { // implements Node interface
     // Id of leader. -1 if unknown
     LeaderId int 
     // A channel for client to listen on. What goes into Append must come out of here at some point.
-    CommitChannel chan commitAction
+    CommitChannel   chan commitAction
+    ShutdownChannel chan int
+    isUp            bool
+    isInitialized   bool
     // Last known committed index in the log.  This could be -1 until the system stabilizes.
     /*func CommittedIndex int {
         return server_state.commitIndex
@@ -54,9 +68,7 @@ type RaftNode struct { // implements Node interface
     // Client's message to Raft node
     Append([]byte)
     // Returns the data at a log index, or an error.
-    Get(index int) (err, []byte)
-    // Signal to shut down all goroutines, stop sockets, flush log and close it, cancel timers.
-    Shutdown()*/
+    Get(index int) (err, []byte)*/
 }
 
 // Returns a Node object
@@ -82,7 +94,10 @@ func NewRaftNode(config Config) *RaftNode {
                         eventCh             : make(chan interface{}),
                         timeoutCh           : make(chan interface{}),
                         CommitChannel       : make(chan commitAction,200),
+                        ShutdownChannel     : make(chan int),
                         LogDir              : config.LogDir }
+    raft.isUp = false
+    raft.isInitialized = true
     return &raft
 }
 
@@ -94,10 +109,14 @@ func (rn *RaftNode) Append(data []byte) {
 }
 
 func (rn *RaftNode) processEvents() {
-    RegisterEncoding()
-    rn.timer = time.AfterFunc(time.Duration(rn.server_state.heartbeatTimeout +rand.Intn(100))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+    if !rn.IsNodeInitialized() {
+        rn.prnt("Raft node not initialized")
+        return
+    }
 
-    rn.prnt("Timer started")
+    RegisterEncoding()
+    rn.timer = time.AfterFunc(time.Duration(rn.server_state.electionTimeout +rand.Intn(400))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+    rn.isUp = true
     for {
         var ev interface{}
                 //fmt.Println("channel in process events ",rn.config.Id, &rn.eventCh)
@@ -131,6 +150,12 @@ func (rn *RaftNode) processEvents() {
             event := ev.Msg.(interface{})
             actions := rn.server_state.processEvent(event)
             rn.doActions(actions)
+        case _, ok := <- rn.ShutdownChannel:
+            rn.prnt("SHUTDOWN CHANNEL CASE------")
+            if !ok {    // If channel closed, return from function
+                rn.prnt("Shutting down")
+                return
+            }
         default:
             //fmt.Printf("Hello %v\n", rn.config.Id)
             //rn.eventCh <- timeoutEvent{}
@@ -192,4 +217,34 @@ func RegisterEncoding () {
     //gob.Register(timeoutEvent{})
     gob.Register(appendEvent{})
     gob.Register(LogEntry{})
+}
+
+func (rn *RaftNode) Start() {
+    go rn.processEvents()
+}
+// Signal to shut down all goroutines, stop sockets, flush log and close it, cancel timers.
+func (rn *RaftNode) Shutdown() {
+    if !rn.IsNodeUp() {
+        return
+    }
+    rn.isUp = false
+    rn.isInitialized = false
+    close(rn.ShutdownChannel)       // Closing this channel would trigger the go routine to terminate
+    rn.timer.Stop()
+    rn.clusterServer.Close()
+    rn.server_state = ServerState{}
+}
+
+func (rn *RaftNode) GetId() int {
+    return rn.server_state.server_id
+}
+
+func (rn *RaftNode) IsNodeUp() bool {
+    return rn.isUp
+}
+func (rn *RaftNode) IsNodeInitialized() bool {
+    return rn.isInitialized
+}
+func (rn *RaftNode) IsLeader() bool {
+    return rn.IsNodeUp() && (rn.server_state.myState==LEADER)
 }
