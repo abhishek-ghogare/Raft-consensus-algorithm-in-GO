@@ -2,13 +2,53 @@ package main
 
 import (
     "testing"
-	"strconv"
+	"time"
+"math/rand"
 )
 
 
+func Test (t *testing.T) {
+	rand.Seed(10)
+	cleanupLogs()
+	rafts := makeRafts() // array of []RaftNode
 
 
-func weTestBasic (t *testing.T) {
+	ldr := rafts.getLeader(t)
+	ldr.Append("foo")
+	rafts.checkSingleCommit(t,"foo")
+
+	ldr = rafts.getLeader(t)
+	mockCluster.Partition([]int{1,2,3}, []int{4,5})
+	time.Sleep(2*time.Second)
+	mockCluster.Heal()
+	ldr = rafts.getLeader(t)
+	ldr.Append("bar")
+	rafts.checkSingleCommit(t,"bar")
+
+	rafts.shutdownRafts()
+}
+
+
+func TestNetworkPartition (t *testing.T) {
+	cleanupLogs()
+	rafts := makeRafts() // array of []RaftNode
+
+	ldr := rafts.getLeader(t)
+	ldr.Append("foo")
+	rafts.checkSingleCommit(t,"foo")
+
+	ldr = rafts.getLeader(t)
+	mockCluster.Partition([]int{1,2,3}, []int{4,5})
+	time.Sleep(2*time.Second)
+	mockCluster.Heal()
+	time.Sleep(2*time.Second)
+	ldr = rafts.getLeader(t)
+	ldr.Append("bar")
+
+	rafts.shutdownRafts()
+}
+
+func TestBasic (t *testing.T) {
 	cleanupLogs()
 	rafts := makeRafts() 		// array of []RaftNode
 	prnt("Rafts created")
@@ -23,7 +63,7 @@ func weTestBasic (t *testing.T) {
 func TestLeaderReelection (t *testing.T) {
 	cleanupLogs()
 	rafts := makeRafts() // array of []RaftNode
-	prnt("Rafts created")
+
 	ldr := rafts.getLeader(t)
 	ldr.Shutdown()
 	ldr = rafts.getLeader(t)
@@ -36,7 +76,6 @@ func TestLeaderReelection (t *testing.T) {
 func TestServerStateRestore (t *testing.T) {
 	cleanupLogs()
 	rafts := makeRafts() // array of []RaftNode
-	prnt("Rafts created")
 
 	ldr := rafts.getLeader(t)
 	ldr.Append("foo")
@@ -64,16 +103,7 @@ func TestServerStateRestore (t *testing.T) {
 
 	ldr.Shutdown()
 	ldr = rafts.getLeader(t)
-
-	config, err := FromConfigFile("/tmp/raft/node" + strconv.Itoa(ldr_id) + "/config.json")
-	prnt("Node config read : %+v", config)
-	if err!=nil {
-		t.Fatalf("Error reopening config : %v", err.Error())
-	}
-	config.mockServer = mockCluster.Servers[config.Id]
-	//config.mockServer.Heal()
-	rafts[ldr_index] = config.RestoreServerState()
-	rafts[ldr_index].Start()
+	rafts.restoreRaft(t,ldr_id)
 
 	expect(t, rafts[ldr_index].server_state.logs[1].Data , "foo", "Log mismatch after restarting server")
 	expect(t, rafts[ldr_index].server_state.logs[2].Data , "bar", "Log mismatch after restarting server")

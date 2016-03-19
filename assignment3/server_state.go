@@ -20,6 +20,7 @@ const (
     FOLLOWER=2;
     LEADER=1;
     )
+const randomTimeout = 200
 
 type LogEntry struct {
     Term  int
@@ -134,7 +135,6 @@ type ServerState struct {
     receivedVote     []int   // Using first 0th dummy entry for all arrays
 
                          // Timeouts in milliseconds
-                         // TODO:: DO we need to reset alarm after state conversion?
     electionTimeout  int
     heartbeatTimeout int
 }
@@ -162,9 +162,6 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
 
 //  Returns last log entry
 func (server *ServerState) getLastLog () LogEntry {
-    if len(server.logs)<=0 {
-        server.prnt("ERROR:::")
-    }
     return server.logs[len(server.logs) - 1]
 }
 
@@ -263,7 +260,7 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
         server.CurrentTerm = event.Term
         server.VotedFor = -1
 
-        alarm  := alarmAction{time:server.electionTimeout+rand.Intn(500)} // slightly greater time to receive heartbeat
+        alarm  := alarmAction{time:server.electionTimeout+rand.Intn(randomTimeout)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
         return actions
     } else if server.CurrentTerm > event.Term {
@@ -366,7 +363,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
             fallthrough
         case FOLLOWER:
             // Reset heartbeat timeout
-            alarm := alarmAction{time:server.electionTimeout+rand.Intn(500)} // slightly greater time to receive heartbeat
+            alarm := alarmAction{time:server.electionTimeout+rand.Intn(randomTimeout)} // slightly greater time to receive heartbeat
             actions = append(actions, alarm)
 
             if server.CurrentTerm < event.Term {
@@ -403,7 +400,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 // There are entries from last leaders
                 // truncate them up to the end
                 truncatedLogs := server.logs[event.PrevLogIndex + 1 : ]
-                server.logs = server.logs[ : event.PrevLogIndex] // TODO:: is it really prevIndex+1? it should be only prevIndex
+                server.logs = server.logs[ : event.PrevLogIndex + 1]
                 //server.prnt("%+v",server)
                 server.prnt("Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
                 for _, log := range truncatedLogs {
@@ -421,7 +418,6 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 actions = append(actions,action)
             }
 
-            //server.prnt("$$$$$$$$$$$$ Checking commits Leader:%v server:%v", event.LeaderCommit, server.commitIndex)
             if ( event.LeaderCommit > server.CommitIndex ) {
                 var commitFrom, commitUpto int
                 // If leader has commited entries, so should this server
@@ -473,7 +469,7 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
         server.VotedFor = -1
 
         // reset alarm
-        alarm := alarmAction{time:server.electionTimeout+rand.Intn(500)} // slightly greater time to receive heartbeat
+        alarm := alarmAction{time:server.electionTimeout+rand.Intn(randomTimeout)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
         return actions
     }
@@ -482,11 +478,8 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
         case LEADER:
             if ! event.Success {
                 // there are holes in follower's log
-                // TODO::check for  event.LastLogIndex + 1
                 if event.LastLogIndex < server.nextIndex[event.FromId] {
                     server.nextIndex[event.FromId] = event.LastLogIndex + 1
-                    //server.prnt("THIS is index nextIndex[]:%v   Event:%+v", server.nextIndex[event.FromId], event)
-                //server.nextIndex[event.FromId] -= 1
                 }
 
                 // Resend all logs from the holes to the end
@@ -514,10 +507,8 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
                 // If there exists an N such that N > commitIndex, a majority
                 // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
                 // set commitIndex = N
-                //server.prnt("$$$$$$$$$$$$$$$$$$$ Sorted array: %v", sorted)
                 for i := server.numberOfNodes/2; i >= 0 ; i-- {
                     if sorted[i] > server.CommitIndex && server.logs[sorted[i]].Term == server.CurrentTerm {
-                        //server.prnt("$$$$$$$$$$$$$$$$$$$ Found eligible: %v", i)
                         // Commit all not committed eligible entries
                         for k:=server.CommitIndex +1 ; k<=sorted[i] ; k++ {
                             action := commitAction {
@@ -575,7 +566,7 @@ func (server *ServerState) timeout ( event timeoutEvent ) []interface{} {
             server.myState = CANDIDATE
             server.CurrentTerm = server.CurrentTerm +1
             server.VotedFor = server.Server_id
-            actions             = append(actions, alarmAction{time:server.electionTimeout+rand.Intn(500)} )
+            actions             = append(actions, alarmAction{time:server.electionTimeout+rand.Intn(randomTimeout)} )
             server.receivedVote[server.Server_id] = server.CurrentTerm  // voting to self
 
 
@@ -630,6 +621,13 @@ func (server *ServerState) appendClientRequest ( event appendEvent ) []interface
 
 
 
+func (server *ServerState) checkLogConsistency() {
+    for i, log := range server.logs {
+        if log.Index != i {
+            server.prnt("ERRORR\n\nn\nERROR: log inconsistency found\n%v", server)
+        }
+    }
+}
 /********************************************************************
  *                                                                  *
  *                          Process event                           *
@@ -637,6 +635,7 @@ func (server *ServerState) appendClientRequest ( event appendEvent ) []interface
  ********************************************************************/
 func (server *ServerState) processEvent ( event interface{} ) []interface{} {
     // Initialise the variables and timeout
+    defer server.checkLogConsistency()
 
     switch event.(type) {
         case appendRequestEvent:
