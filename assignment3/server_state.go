@@ -24,7 +24,7 @@ const (
 type LogEntry struct {
     Term  int
     Index int
-    Data  []byte
+    Data  interface{}
 }
 
 /********************************************************************
@@ -86,14 +86,17 @@ type sendAction struct {
 // Index is valid only if err == nil
 type commitAction struct {
     index   int       // for error, set to -1
-    data    []byte
+    data    LogEntry
     err     string
 }
 
 type logStore struct {
     index   int
-    data    []byte
+    data    LogEntry      // Data is of LogEntry type
 }
+
+// Make node to store its state on persistent store
+type stateStore struct {}
 
 type alarmAction struct {
     time    int
@@ -113,7 +116,7 @@ type ServerState struct {
     votedFor        int     // -1: not voted
     numberOfNodes   int
 
-    // log is initialised with single empty log, to make life easier in future checking
+    // log is initialised with single dummy log, to make life easier in future checking
     // Index starts from 1, as first empty entry is present
     log         []LogEntry
 
@@ -142,7 +145,7 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
     server.votedFor     = -1
     server.numberOfNodes= numberOfNodes
     server.log          = make([]LogEntry, 0)
-    server.log          = append(server.log, LogEntry{Term:0, Index:0, Data:[]byte("FIRST")}) // Initialising log with single empty log, to make life easier in future checking
+    server.log          = append(server.log, LogEntry{Term:0, Index:0, Data:[]byte("Dummy Log")}) // Initialising log with single empty log, to make life easier in future checking
 
     server.commitIndex  = 0
     server.nextIndex    = make([]int, numberOfNodes+1)
@@ -400,7 +403,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 server.prnt("%+v",server)
                 server.prnt("Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
                 for _, log := range truncatedLogs {
-                    action := commitAction{index:log.Index, data:log.Data, err:"Log truncated"}
+                    action := commitAction{index:log.Index, data:log, err:"Log truncated"}
                     actions = append(actions,action)
                 }
             }
@@ -410,7 +413,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
             server.log = append(server.log, event.Entries...)
 
             for _, log := range event.Entries {
-                action := logStore{ index: log.Index, data:[]byte{}}
+                action := logStore{ index: log.Index, data:log }
                 actions = append(actions,action)
             }
 
@@ -428,9 +431,9 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
 
                 // commit all logs from commitFrom to commitUpto
                 for i:=commitFrom ; i<=commitUpto ; i++ {
-                    action := commitAction{index:i, data:server.log[i].Data, err:""}
+                    action := commitAction{index:i, data:server.log[i], err:""}
                     actions = append(actions,action)
-                    server.prnt("Commiting index %v, data:%v",i,string(server.log[i].Data))
+                    server.prnt("Commiting index %v, data:%v",i,server.log[i].Data)
                 }
                 server.commitIndex = commitUpto
             }
@@ -515,7 +518,7 @@ func (server *ServerState) appendRequestResponse ( event appendRequestRespEvent 
                         for k:=server.commitIndex+1 ; k<=sorted[i] ; k++ {
                             action := commitAction {
                                         index   : k,
-                                        data    : server.log[k].Data,
+                                        data    : server.log[k],
                                         err     : "" }
                             actions = append(actions, action)
                         }
@@ -611,7 +614,7 @@ func (server *ServerState) appendClientRequest ( event appendEvent ) []interface
             server.log = append(server.log, log)        // Append to self log
             server.matchIndex[server.server_id] = server.getLastLog().Index  // Update self matchIndex
 
-            actions = append(actions, logStore{ index:log.Index, data:log.Data })
+            actions = append(actions, logStore{ index:log.Index, data:log })
             actions = append(actions, server.broadcast(appendReq)...)
         case CANDIDATE:
         case FOLLOWER:

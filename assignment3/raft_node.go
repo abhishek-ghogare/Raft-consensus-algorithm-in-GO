@@ -2,7 +2,6 @@ package main
 
 import (
     "encoding/gob"
-    "strconv"
     "fmt"
     "github.com/cs733-iitb/cluster"
     "github.com/cs733-iitb/log"
@@ -12,24 +11,8 @@ import (
     "sync"
     "os"
     "encoding/json"
-"errors"
+    "errors"
 )
-
-// Debugging tools
-
-const CLR_R = "\x1b[31;1m"
-const CLR_G = "\x1b[32;1m"
-const CLR_Y = "\x1b[33;1m"
-const CLR_B = "\x1b[34;1m"
-const CLR_M = "\x1b[35;1m"
-const CLR_FMT = "\x1b[3%v;1m"
-const CLR_END = "\x1b[0m"
-
-func (rn *RaftNode) prnt(format string, args ...interface{}) {
-  fmt.Printf( fmt.Sprintf(CLR_FMT, rn.server_state.myState) +
-  strconv.Itoa(rn.server_state.currentTerm) +
-  " [NODE\t: " + strconv.Itoa(rn.GetId()) + "] \t" + format + "\n" + CLR_END, args...)
-}
 
 type NodeNetAddr struct {
     Id   int
@@ -80,7 +63,20 @@ type RaftNode struct { // implements Node interface
     Get(index int) (err, []byte)*/
 }
 
-func ToConfig(configuration interface{}) (config *Config, err error){
+func ToConfigFile(configFile string, config *Config) (err error){
+    var f *os.File
+    if f, err = os.Create(configFile); err != nil {
+        return err
+    }
+    defer f.Close()
+    enc := json.NewEncoder(f)
+    if err = enc.Encode(config); err != nil {
+        return  err
+    }
+    return nil
+}
+
+func FromConfigFile(configuration interface{}) (config *Config, err error){
     var cfg Config
     var ok bool
     var configFile string
@@ -100,7 +96,21 @@ func ToConfig(configuration interface{}) (config *Config, err error){
     return &cfg, nil
 }
 
-func ToServerState(serverState interface{}) ( serState *ServerState, err error){
+
+func ToServerStateFile(serverStateFile string, serState *ServerState) (err error){
+    var f *os.File
+    if f, err = os.Create(serverStateFile); err != nil {
+        return err
+    }
+    defer f.Close()
+    enc := json.NewEncoder(f)
+    if err = enc.Encode(serState); err != nil {
+        return  err
+    }
+    return nil
+}
+
+func FromServerStateFile(serverState interface{}) ( serState *ServerState, err error){
     var state ServerState
     var ok bool
     var serverStateFile string
@@ -122,17 +132,8 @@ func ToServerState(serverState interface{}) ( serState *ServerState, err error){
 
 
 // Returns a Node object
-func NewRaftNode(config Config) *RaftNode {
-
-
-    var peers []cluster.PeerConfig
-    for _,nodeNetAddr := range config.NodeNetAddrList {
-        peers = append(peers, cluster.PeerConfig{Id: nodeNetAddr.Id, Address: fmt.Sprintf("%v:%v", nodeNetAddr.Host, nodeNetAddr.Port)})
-    }
-
-    config1 := cluster.Config { Peers: peers }
-    server1, _ := cluster.New(config.Id, config1)
-
+func (config Config) NewRaftNode() *RaftNode {
+    (&RaftNode{}).prnt("Opening log file : %v", config.LogDir)
     lg, err := log.Open(config.LogDir)
     if err != nil {
         fmt.Printf("Unable to create log file : %v\n", err)
@@ -150,7 +151,7 @@ func NewRaftNode(config Config) *RaftNode {
     raft := RaftNode{
                         //config              : config, 
                         server_state        : server_state, 
-                        clusterServer       : &server1,
+                        clusterServer       : config.getClusterServer(),
                         logs                : lg,
                         eventCh             : make(chan interface{}),
                         timeoutCh           : make(chan interface{}),
@@ -160,7 +161,95 @@ func NewRaftNode(config Config) *RaftNode {
     raft.isUp = false
     raft.isInitialized = true
 
-    raft.logs.Append("Dummy Entry")
+    raft.logs.Append(LogEntry{Index:0,Term:0,Data:"Dummy Entry"})
+
+    // Storing server state
+    ToServerStateFile(config.LogDir+"/serverState.json",&raft.server_state)
+
+    return &raft
+}
+
+
+func (config Config) getClusterServer () *cluster.Server {
+    //--------------------------------
+    // Create cluster server from config
+    //--------------------------------
+    var peers []cluster.PeerConfig
+    for _,nodeNetAddr := range config.NodeNetAddrList {
+        peers = append(peers, cluster.PeerConfig{Id: nodeNetAddr.Id, Address: fmt.Sprintf("%v:%v", nodeNetAddr.Host, nodeNetAddr.Port)})
+    }
+    config1 := cluster.Config { Peers: peers }
+    server, err := cluster.New(config.Id, config1)
+    if err!=nil {
+        (&RaftNode{}).prnt("Error in creting cluster server : %v", err.Error())
+        return nil
+    }
+
+
+    (&RaftNode{}).prnt("Cluster server created : %v", config.Id)
+    return &server
+}
+
+func (config Config) RestoreServerState () *RaftNode {
+
+    //--------------------------------
+    // Restore server state from persistent storage
+    //--------------------------------
+    server_state, err := FromServerStateFile(config.LogDir+"/serverState.json")
+    if err != nil {
+        (&RaftNode{}).prnt("Unable to restore server state : %v", err.Error())
+        return nil
+    }
+
+    numOfNodes := len(config.NodeNetAddrList)
+
+    server_state.commitIndex        = 0
+    server_state.electionTimeout    = config.ElectionTimeout
+    server_state.heartbeatTimeout   = config.HeartbeatTimeout
+    server_state.numberOfNodes      = numOfNodes
+    server_state.nextIndex          = make([]int, numOfNodes+1)
+    server_state.matchIndex         = make([]int, numOfNodes+1)
+    server_state.receivedVote       = make([]int, numOfNodes+1)
+    server_state.myState            = FOLLOWER
+    server_state.log                = make([]LogEntry, 0)
+
+    for i := 0; i <= numOfNodes; i++ {
+        server_state.nextIndex[i]     = 1     // Set to index of next log to send
+        server_state.matchIndex[i]    = 0     // Set to last log index on that server, increases monotonically
+    }
+
+    // Restore logs of server_state from persistent storage
+    lg, err := log.Open(config.LogDir)
+    if err != nil {
+        fmt.Printf("Unable to create log file : %v\n", err)
+        return &RaftNode{}
+    }
+    for i:=int64(0) ; i<=lg.GetLastIndex() ; i++ {
+        data, err := lg.Get(i)  // Read log at index i
+        if err!=nil {
+            (&RaftNode{}).prnt("Error in reading log : %v", err.Error())
+            return &RaftNode{}
+        }
+
+        logEntry := data.(LogEntry) // The data is of LogEntry type
+        server_state.log = append(server_state.log, logEntry)
+    }
+
+    //--------------------------------
+    // Create RaftNode
+    //--------------------------------
+    raft := RaftNode{
+        server_state        : *server_state,
+        clusterServer       : config.getClusterServer(),
+        logs                : lg,
+        eventCh             : make(chan interface{}),
+        timeoutCh           : make(chan interface{}),
+        CommitChannel       : make(chan commitAction,200),
+        ShutdownChannel     : make(chan int),
+        LogDir              : config.LogDir }
+
+    raft.isUp = false
+    raft.isInitialized = true
 
     return &raft
 }
