@@ -17,7 +17,7 @@ const CLR_END = "\x1b[0m"
 
 func (rn *RaftNode) prnt(format string, args ...interface{}) {
 	fmt.Printf( fmt.Sprintf(CLR_FMT, rn.server_state.myState) +
-	strconv.Itoa(rn.server_state.currentTerm) +
+	strconv.Itoa(rn.server_state.CurrentTerm) +
 	" [NODE\t: " + strconv.Itoa(rn.GetId()) + "] \t" + format + "\n" + CLR_END, args...)
 }
 

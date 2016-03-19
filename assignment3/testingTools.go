@@ -28,7 +28,6 @@ func makeConfigs() []*Config {
 		config := configBase
 		config.Id = i
 		config.LogDir = "/tmp/raft/node"+strconv.Itoa(i)
-		ToConfigFile(config.LogDir+"/config.json",&config)
 		prnt("Creating Config %v", config.Id)
 		configs = append(configs,&config)
 	}
@@ -39,6 +38,10 @@ func makeRafts() Rafts {
 	var rafts Rafts
 	for _, config := range makeConfigs() {
 		raft := config.NewRaftNode()
+		err := ToConfigFile(config.LogDir+"/config.json",*config)
+		if err != nil {
+			prnt("Error in storing config to file : %v", err.Error())
+		}
 		raft.Start()
 		rafts = append(rafts,raft)
 	}
@@ -107,7 +110,7 @@ func getLeader(t *testing.T, rafts Rafts) (*RaftNode) {
 			}
 
 			if areAllFollowers {
-				prnt("Stable leader found : %v", ldr.server_state.server_id)
+				prnt("Stable leader found : %v", ldr.server_state.Server_id)
 				abortCh.Stop()
 				return ldr
 			}
@@ -144,7 +147,7 @@ func (rafts Rafts) checkSingleCommit (t *testing.T, data string) {
 								t.Fatalf(ci.err)
 							}
 							if string(ci.data.Data.([]byte)) != data {
-								t.Fatalf("Got different data")
+								t.Fatalf("Got different data : expected %v , received : %v", data, string(ci.data.Data.([]byte)))
 							}
 							prnt("Commit received at commit channel of %v", node.GetId())
 							checked[i] = true // Ignore from future consideration

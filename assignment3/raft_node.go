@@ -2,7 +2,6 @@ package main
 
 import (
     "encoding/gob"
-    "fmt"
     "github.com/cs733-iitb/cluster"
     "github.com/cs733-iitb/log"
     "math/rand"
@@ -12,22 +11,8 @@ import (
     "os"
     "encoding/json"
     "errors"
+    "strconv"
 )
-
-type NodeNetAddr struct {
-    Id   int
-    Host string
-    Port int
-}
-
-// This is an example structure for Config .. change it to your convenience.
-type Config struct {
-    NodeNetAddrList     []NodeNetAddr     // Information about all servers, including this.
-    Id                  int             // this node's id. One of the cluster's entries should match.
-    LogDir              string          // Log file directory for this node
-    ElectionTimeout     int
-    HeartbeatTimeout    int
-}
 
 type RaftNode struct { // implements Node interface
     eventCh         chan interface{}
@@ -38,12 +23,7 @@ type RaftNode struct { // implements Node interface
     clusterServer   *cluster.Server
     logs            *log.Log
     timer           *time.Timer
-    /*// Node's id
-    func Id() int {
-        return config.Id
-    }*/
-    // Id of leader. -1 if unknown
-    LeaderId int 
+
     // A channel for client to listen on. What goes into Append must come out of here at some point.
     CommitChannel   chan commitAction
     ShutdownChannel chan int
@@ -52,18 +32,19 @@ type RaftNode struct { // implements Node interface
 
     // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
     waitShutdown    sync.WaitGroup
-    // Last known committed index in the log.  This could be -1 until the system stabilizes.
-    /*func CommittedIndex int {
-        return server_state.commitIndex
-    }*/
-/*
-    // Client's message to Raft node
-    Append([]byte)
-    // Returns the data at a log index, or an error.
-    Get(index int) (err, []byte)*/
+
 }
 
-func ToConfigFile(configFile string, config *Config) (err error){
+// Last known committed index in the log.  This is 0 until the system stabilizes.
+func (rn *RaftNode) CommittedIndex() int {
+    if rn.IsNodeUp() {
+        return rn.server_state.CommitIndex
+    } else {
+        return 0
+    }
+}
+
+func ToConfigFile(configFile string, config Config) (err error){
     var f *os.File
     if f, err = os.Create(configFile); err != nil {
         return err
@@ -97,7 +78,7 @@ func FromConfigFile(configuration interface{}) (config *Config, err error){
 }
 
 
-func ToServerStateFile(serverStateFile string, serState *ServerState) (err error){
+func ToServerStateFile(serverStateFile string, serState ServerState) (err error){
     var f *os.File
     if f, err = os.Create(serverStateFile); err != nil {
         return err
@@ -130,129 +111,6 @@ func FromServerStateFile(serverState interface{}) ( serState *ServerState, err e
     return &state, nil
 }
 
-
-// Returns a Node object
-func (config Config) NewRaftNode() *RaftNode {
-    (&RaftNode{}).prnt("Opening log file : %v", config.LogDir)
-    lg, err := log.Open(config.LogDir)
-    if err != nil {
-        fmt.Printf("Unable to create log file : %v\n", err)
-        r := RaftNode{}
-        return &r
-    }
-
-
-    var server_state ServerState
-    server_state.setupServer ( FOLLOWER, len(config.NodeNetAddrList) )
-    server_state.electionTimeout     = config.ElectionTimeout
-    server_state.heartbeatTimeout    = config.HeartbeatTimeout
-    server_state.server_id           = config.Id
-
-    raft := RaftNode{
-                        //config              : config, 
-                        server_state        : server_state, 
-                        clusterServer       : config.getClusterServer(),
-                        logs                : lg,
-                        eventCh             : make(chan interface{}),
-                        timeoutCh           : make(chan interface{}),
-                        CommitChannel       : make(chan commitAction,200),
-                        ShutdownChannel     : make(chan int),
-                        LogDir              : config.LogDir }
-    raft.isUp = false
-    raft.isInitialized = true
-
-    raft.logs.Append(LogEntry{Index:0,Term:0,Data:"Dummy Entry"})
-
-    // Storing server state
-    ToServerStateFile(config.LogDir+"/serverState.json",&raft.server_state)
-
-    return &raft
-}
-
-
-func (config Config) getClusterServer () *cluster.Server {
-    //--------------------------------
-    // Create cluster server from config
-    //--------------------------------
-    var peers []cluster.PeerConfig
-    for _,nodeNetAddr := range config.NodeNetAddrList {
-        peers = append(peers, cluster.PeerConfig{Id: nodeNetAddr.Id, Address: fmt.Sprintf("%v:%v", nodeNetAddr.Host, nodeNetAddr.Port)})
-    }
-    config1 := cluster.Config { Peers: peers }
-    server, err := cluster.New(config.Id, config1)
-    if err!=nil {
-        (&RaftNode{}).prnt("Error in creting cluster server : %v", err.Error())
-        return nil
-    }
-
-
-    (&RaftNode{}).prnt("Cluster server created : %v", config.Id)
-    return &server
-}
-
-func (config Config) RestoreServerState () *RaftNode {
-
-    //--------------------------------
-    // Restore server state from persistent storage
-    //--------------------------------
-    server_state, err := FromServerStateFile(config.LogDir+"/serverState.json")
-    if err != nil {
-        (&RaftNode{}).prnt("Unable to restore server state : %v", err.Error())
-        return nil
-    }
-
-    numOfNodes := len(config.NodeNetAddrList)
-
-    server_state.commitIndex        = 0
-    server_state.electionTimeout    = config.ElectionTimeout
-    server_state.heartbeatTimeout   = config.HeartbeatTimeout
-    server_state.numberOfNodes      = numOfNodes
-    server_state.nextIndex          = make([]int, numOfNodes+1)
-    server_state.matchIndex         = make([]int, numOfNodes+1)
-    server_state.receivedVote       = make([]int, numOfNodes+1)
-    server_state.myState            = FOLLOWER
-    server_state.log                = make([]LogEntry, 0)
-
-    for i := 0; i <= numOfNodes; i++ {
-        server_state.nextIndex[i]     = 1     // Set to index of next log to send
-        server_state.matchIndex[i]    = 0     // Set to last log index on that server, increases monotonically
-    }
-
-    // Restore logs of server_state from persistent storage
-    lg, err := log.Open(config.LogDir)
-    if err != nil {
-        fmt.Printf("Unable to create log file : %v\n", err)
-        return &RaftNode{}
-    }
-    for i:=int64(0) ; i<=lg.GetLastIndex() ; i++ {
-        data, err := lg.Get(i)  // Read log at index i
-        if err!=nil {
-            (&RaftNode{}).prnt("Error in reading log : %v", err.Error())
-            return &RaftNode{}
-        }
-
-        logEntry := data.(LogEntry) // The data is of LogEntry type
-        server_state.log = append(server_state.log, logEntry)
-    }
-
-    //--------------------------------
-    // Create RaftNode
-    //--------------------------------
-    raft := RaftNode{
-        server_state        : *server_state,
-        clusterServer       : config.getClusterServer(),
-        logs                : lg,
-        eventCh             : make(chan interface{}),
-        timeoutCh           : make(chan interface{}),
-        CommitChannel       : make(chan commitAction,200),
-        ShutdownChannel     : make(chan int),
-        LogDir              : config.LogDir }
-
-    raft.isUp = false
-    raft.isInitialized = true
-
-    return &raft
-}
 
 // Client's message to Raft node
 func (rn *RaftNode) Append(data []byte) {
@@ -289,9 +147,9 @@ func (rn *RaftNode) processEvents() {
             // Debug logging
             switch ev.Msg.(type) {
             case appendRequestEvent:
-                rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+                rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.Server_id, ev.Pid, ev.Msg)
             case appendRequestRespEvent:
-                rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+                rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.Server_id, ev.Pid, ev.Msg)
             case requestVoteEvent :
                 //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             case requestVoteRespEvent :
@@ -333,13 +191,13 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             // Debug logging
             switch action.event.(type) {
             case appendRequestEvent:
-                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.Server_id, action.toId, action.event)
             case appendRequestRespEvent:
-                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.Server_id, action.toId, action.event)
             case requestVoteEvent :
-                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.Server_id, action.toId, action.event)
             case requestVoteRespEvent :
-                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.server_id, action.toId, action.event)
+                rn.prnt("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.event).Name(), rn.server_state.Server_id, action.toId, action.event)
             }
             //rn.prnt("OutboxEvent : to   %v \"%v\"\t\t%v", action.toId, reflect.TypeOf(action.event).Name(), action.event)
 
@@ -390,6 +248,12 @@ func (rn *RaftNode) Start() {
 }
 // Signal to shut down all goroutines, stop sockets, flush log and close it, cancel timers.
 func (rn *RaftNode) Shutdown() {
+    err := ToServerStateFile("/tmp/raft/node" + strconv.Itoa(rn.GetId()) + "/serverState.json", rn.server_state) // TODO:: temp patch
+    if err!=nil {
+        prnt("Failed to store server state")
+    } else {
+        prnt("Server state stored on file")
+    }
     if !rn.IsNodeUp() {
         rn.prnt("Already down")
         return
@@ -405,7 +269,7 @@ func (rn *RaftNode) Shutdown() {
 
 func (rn *RaftNode) GetId() int {
     if rn.IsNodeUp() {
-        return rn.server_state.server_id
+        return rn.server_state.Server_id
     } else {
         return 0;
     }
@@ -413,7 +277,7 @@ func (rn *RaftNode) GetId() int {
 
 func (rn *RaftNode) GetCurrentTerm() int {
     if rn.IsNodeUp() {
-        return rn.server_state.currentTerm
+        return rn.server_state.CurrentTerm
     } else {
         return 0
     }
@@ -426,5 +290,5 @@ func (rn *RaftNode) IsNodeInitialized() bool {
     return rn.isInitialized
 }
 func (rn *RaftNode) IsLeader() bool {
-    return rn.IsNodeUp() && (rn.server_state.myState==LEADER)
+    return rn.IsNodeUp() && (rn.server_state.myState ==LEADER)
 }
