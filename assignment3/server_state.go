@@ -16,9 +16,9 @@ func (server_state *ServerState) prnt(format string, args ...interface{}) {
 //var TIMEOUTTIME = int(100);  // Timeout in ms
 
 const (
-    CANDIDATE=0;
-    FOLLOWER=1;
-    LEADER=2;
+    CANDIDATE=3;
+    FOLLOWER=2;
+    LEADER=1;
     )
 
 type LogEntry struct {
@@ -271,6 +271,8 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
 
         case CANDIDATE:
             // Refer comments @ receivedVote declaration
+            // If vote received from a node, we are storing the term in receivedVote array for which the vote has received.
+            // This way we don't need to reinitialise the voted for array every time new election starts
             vote := server.receivedVote[event.FromId]
             if vote < 0 {
                 vote = -vote
@@ -300,7 +302,7 @@ func (server *ServerState) voteRequestResponse ( event requestVoteRespEvent ) []
                 } else if count > server.numberOfNodes/2 {
                     // become leader
 
-                    server.prnt("KEADER BAN GAYE %v", server.server_id)
+                    server.prnt("Leader has been elected : %v", server.server_id)
                     server.initialiseLeader()
 
                     appendReq   := appendRequestEvent{

@@ -5,9 +5,14 @@ import (
     "strconv"
     "fmt"
     "github.com/cs733-iitb/cluster"
+    "github.com/cs733-iitb/log"
     "math/rand"
     "reflect"
     "time"
+    "sync"
+    "os"
+    "encoding/json"
+"errors"
 )
 
 // Debugging tools
@@ -21,7 +26,7 @@ const CLR_FMT = "\x1b[3%v;1m"
 const CLR_END = "\x1b[0m"
 
 func (rn *RaftNode) prnt(format string, args ...interface{}) {
-  fmt.Printf( fmt.Sprintf(CLR_FMT, rn.GetId()) +
+  fmt.Printf( fmt.Sprintf(CLR_FMT, rn.server_state.myState) +
   strconv.Itoa(rn.server_state.currentTerm) +
   " [NODE\t: " + strconv.Itoa(rn.GetId()) + "] \t" + format + "\n" + CLR_END, args...)
 }
@@ -47,7 +52,8 @@ type RaftNode struct { // implements Node interface
     //config          Config
     LogDir          string          // Log file directory for this node
     server_state    ServerState
-    clusterServer   cluster.Server
+    clusterServer   *cluster.Server
+    logs            *log.Log
     timer           *time.Timer
     /*// Node's id
     func Id() int {
@@ -60,6 +66,9 @@ type RaftNode struct { // implements Node interface
     ShutdownChannel chan int
     isUp            bool
     isInitialized   bool
+
+    // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
+    waitShutdown    sync.WaitGroup
     // Last known committed index in the log.  This could be -1 until the system stabilizes.
     /*func CommittedIndex int {
         return server_state.commitIndex
@@ -71,8 +80,51 @@ type RaftNode struct { // implements Node interface
     Get(index int) (err, []byte)*/
 }
 
+func ToConfig(configuration interface{}) (config *Config, err error){
+    var cfg Config
+    var ok bool
+    var configFile string
+    if configFile, ok = configuration.(string); ok {
+        var f *os.File
+        if f, err = os.Open(configFile); err != nil {
+            return nil, err
+        }
+        defer f.Close()
+        dec := json.NewDecoder(f)
+        if err = dec.Decode(&cfg); err != nil {
+            return nil, err
+        }
+    } else if cfg, ok = configuration.(Config); !ok {
+        return nil, errors.New("Expected a configuration.json file or a Config structure")
+    }
+    return &cfg, nil
+}
+
+func ToServerState(serverState interface{}) ( serState *ServerState, err error){
+    var state ServerState
+    var ok bool
+    var serverStateFile string
+    if serverStateFile, ok = serverState.(string); ok {
+        var f *os.File
+        if f, err = os.Open(serverStateFile); err != nil {
+            return nil, err
+        }
+        defer f.Close()
+        dec := json.NewDecoder(f)
+        if err = dec.Decode(&state); err != nil {
+            return nil, err
+        }
+    } else if state, ok = serverState.(ServerState); !ok {
+        return nil, errors.New("Expected a serverstate.json file or a ServerState structure")
+    }
+    return &state, nil
+}
+
+
 // Returns a Node object
 func NewRaftNode(config Config) *RaftNode {
+
+
     var peers []cluster.PeerConfig
     for _,nodeNetAddr := range config.NodeNetAddrList {
         peers = append(peers, cluster.PeerConfig{Id: nodeNetAddr.Id, Address: fmt.Sprintf("%v:%v", nodeNetAddr.Host, nodeNetAddr.Port)})
@@ -80,6 +132,14 @@ func NewRaftNode(config Config) *RaftNode {
 
     config1 := cluster.Config { Peers: peers }
     server1, _ := cluster.New(config.Id, config1)
+
+    lg, err := log.Open(config.LogDir)
+    if err != nil {
+        fmt.Printf("Unable to create log file : %v\n", err)
+        r := RaftNode{}
+        return &r
+    }
+
 
     var server_state ServerState
     server_state.setupServer ( FOLLOWER, len(config.NodeNetAddrList) )
@@ -90,7 +150,8 @@ func NewRaftNode(config Config) *RaftNode {
     raft := RaftNode{
                         //config              : config, 
                         server_state        : server_state, 
-                        clusterServer       : server1,
+                        clusterServer       : &server1,
+                        logs                : lg,
                         eventCh             : make(chan interface{}),
                         timeoutCh           : make(chan interface{}),
                         CommitChannel       : make(chan commitAction,200),
@@ -98,6 +159,9 @@ func NewRaftNode(config Config) *RaftNode {
                         LogDir              : config.LogDir }
     raft.isUp = false
     raft.isInitialized = true
+
+    raft.logs.Append("Dummy Entry")
+
     return &raft
 }
 
@@ -115,22 +179,22 @@ func (rn *RaftNode) processEvents() {
     }
 
     RegisterEncoding()
-    rn.timer = time.AfterFunc(time.Duration(rn.server_state.electionTimeout +rand.Intn(400))*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+    rn.timer = time.NewTimer(time.Duration(rn.server_state.electionTimeout +rand.Intn(400))*time.Millisecond)
     rn.isUp = true
     for {
         var ev interface{}
                 //fmt.Println("channel in process events ",rn.config.Id, &rn.eventCh)
         select {
-        case ev = <- rn.timeoutCh :
+        case ev = <- rn.timer.C :
             //rn.prnt("Timeout event received")
-            actions := rn.server_state.processEvent(ev)
+            actions := rn.server_state.processEvent(timeoutEvent{})
             rn.doActions(actions)
         //ev = timeoutEvent{}
         case ev = <- rn.eventCh :
             rn.prnt("Append request received")
             actions := rn.server_state.processEvent(ev)
             rn.doActions(actions)
-        case ev = <- rn.clusterServer.Inbox() :
+        case ev = <- (*rn.clusterServer).Inbox() :
             ev := ev.(*cluster.Envelope)
 
             // Debug logging
@@ -151,9 +215,14 @@ func (rn *RaftNode) processEvents() {
             actions := rn.server_state.processEvent(event)
             rn.doActions(actions)
         case _, ok := <- rn.ShutdownChannel:
-            rn.prnt("SHUTDOWN CHANNEL CASE------")
             if !ok {    // If channel closed, return from function
-                rn.prnt("Shutting down")
+                close(rn.CommitChannel)
+                close(rn.eventCh)
+                close(rn.timeoutCh)
+                (*rn.clusterServer).Close()
+                rn.logs.Close()
+                rn.server_state = ServerState{}
+                rn.waitShutdown.Done()
                 return
             }
         default:
@@ -187,9 +256,9 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
 
 
             if action.toId == -1 {
-                rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:cluster.BROADCAST, Msg:action.event}
+                (*rn.clusterServer).Outbox() <- &cluster.Envelope{Pid:cluster.BROADCAST, Msg:action.event}
             } else {
-                rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:action.toId, Msg:action.event}
+                (*rn.clusterServer).Outbox() <- &cluster.Envelope{Pid:action.toId, Msg:action.event}
             }
         case commitAction :
             rn.prnt("commitAction received %+v", action)
@@ -197,12 +266,20 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             rn.CommitChannel <- action
         case logStore :
             rn.prnt("logStore received")
+            action := action.(logStore)
+            lastInd := int(rn.logs.GetLastIndex())
+            if lastInd >= action.index {
+                rn.logs.TruncateToEnd(int64(action.index)) // Truncate extra entries
+            } else if lastInd < action.index-1 {
+                rn.prnt("Log inconsistency found")
+            }
+            rn.logs.Append(action.data)
         case alarmAction :
             //rn.prnt("==== %25v", "resetting alarm")
             action := action.(alarmAction)
-            rn.timer.Stop()
+            //rn.timer.Stop()
             //timer =
-            rn.timer = time.AfterFunc(time.Duration(action.time)*time.Millisecond, func() { rn.timeoutCh <- timeoutEvent{} })
+            rn.timer.Reset(time.Duration(action.time)*time.Millisecond)
         default:
 
         }
@@ -225,18 +302,32 @@ func (rn *RaftNode) Start() {
 // Signal to shut down all goroutines, stop sockets, flush log and close it, cancel timers.
 func (rn *RaftNode) Shutdown() {
     if !rn.IsNodeUp() {
+        rn.prnt("Already down")
         return
     }
+    rn.prnt("Shutting down")
     rn.isUp = false
     rn.isInitialized = false
-    close(rn.ShutdownChannel)       // Closing this channel would trigger the go routine to terminate
     rn.timer.Stop()
-    rn.clusterServer.Close()
-    rn.server_state = ServerState{}
+    rn.waitShutdown.Add(1)
+    close(rn.ShutdownChannel)       // Closing this channel would trigger the go routine to terminate
+    rn.waitShutdown.Wait()
 }
 
 func (rn *RaftNode) GetId() int {
-    return rn.server_state.server_id
+    if rn.IsNodeUp() {
+        return rn.server_state.server_id
+    } else {
+        return 0;
+    }
+}
+
+func (rn *RaftNode) GetCurrentTerm() int {
+    if rn.IsNodeUp() {
+        return rn.server_state.currentTerm
+    } else {
+        return 0
+    }
 }
 
 func (rn *RaftNode) IsNodeUp() bool {
