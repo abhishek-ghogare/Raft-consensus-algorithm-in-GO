@@ -12,6 +12,7 @@ import (
     "encoding/json"
     "errors"
     "strconv"
+    "github.com/cs733-iitb/cluster/mock"
 )
 
 type RaftNode struct { // implements Node interface
@@ -20,7 +21,7 @@ type RaftNode struct { // implements Node interface
     //config          Config
     LogDir          string          // Log file directory for this node
     server_state    ServerState
-    clusterServer   *cluster.Server
+    clusterServer   *mock.MockServer
     logs            *log.Log
     timer           *time.Timer
 
@@ -113,16 +114,21 @@ func FromServerStateFile(serverState interface{}) ( serState *ServerState, err e
 
 
 // Client's message to Raft node
-func (rn *RaftNode) Append(data []byte) {
+func (rn *RaftNode) Append(data string) {
                 //fmt.Println("channel in append ", &rn.eventCh)
     rn.eventCh <- appendEvent{data: data}
                 //fmt.Printf("Hello\n")
 }
 
 func (rn *RaftNode) processEvents() {
+    rn.prnt("Process events started")
     if !rn.IsNodeInitialized() {
         rn.prnt("Raft node not initialized")
         return
+    }
+
+    if rn.clusterServer.IsClosed() {
+        rn.prnt("ERROR:: cluster server is closed\n\n\n")
     }
 
     RegisterEncoding()
@@ -167,7 +173,7 @@ func (rn *RaftNode) processEvents() {
                 close(rn.eventCh)
                 close(rn.timeoutCh)
                 (*rn.clusterServer).Close()
-                rn.logs.Close()
+                rn.logs.Close() //TODO:: leveldb not found problem
                 rn.server_state = ServerState{}
                 rn.waitShutdown.Done()
                 return

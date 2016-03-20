@@ -24,7 +24,7 @@ const (
 type LogEntry struct {
     Term  int
     Index int
-    Data  interface{}
+    Data  string
 }
 
 /********************************************************************
@@ -68,7 +68,7 @@ type timeoutEvent struct {
 }
 
 type appendEvent struct {
-    data []byte
+    data string
 }
 
 
@@ -145,7 +145,7 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
     server.VotedFor = -1
     server.numberOfNodes= numberOfNodes
     server.logs = make([]LogEntry, 0)
-    server.logs = append(server.logs, LogEntry{Term:0, Index:0, Data:[]byte("Dummy Log")}) // Initialising log with single empty log, to make life easier in future checking
+    server.logs = append(server.logs, LogEntry{Term:0, Index:0, Data:"Dummy Log"}) // Initialising log with single empty log, to make life easier in future checking
 
     server.CommitIndex = 0
     server.nextIndex = make([]int, numberOfNodes+1)
@@ -162,6 +162,9 @@ func (server *ServerState) setupServer ( state int, numberOfNodes int ) {
 
 //  Returns last log entry
 func (server *ServerState) getLastLog () LogEntry {
+    if len(server.logs)<=0 {
+        server.prnt("ERROR:::")
+    }
     return server.logs[len(server.logs) - 1]
 }
 
@@ -387,6 +390,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 return actions
             }*/
 
+            //server.prnt("Serving append request \n%+v\n%+v", server, event)
             if ( server.getLastLog().Index < event.PrevLogIndex || server.logs[event.PrevLogIndex].Term != event.PrevLogTerm ) {
                 // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
                 appendResp := appendRequestRespEvent{FromId:server.Server_id, Term:server.CurrentTerm, Success:false, LastLogIndex:server.getLastLog().Index}
@@ -400,7 +404,7 @@ func (server *ServerState) appendRequest ( event appendRequestEvent ) []interfac
                 // truncate them up to the end
                 truncatedLogs := server.logs[event.PrevLogIndex + 1 : ]
                 server.logs = server.logs[ : event.PrevLogIndex] // TODO:: is it really prevIndex+1? it should be only prevIndex
-                server.prnt("%+v",server)
+                //server.prnt("%+v",server)
                 server.prnt("Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
                 for _, log := range truncatedLogs {
                     action := commitAction{index:log.Index, data:log, err:"Log truncated"}

@@ -5,34 +5,59 @@ import (
 	"time"
 	"strconv"
 	"os"
+	"github.com/cs733-iitb/cluster/mock"
 )
 
 
-func makeConfigs() []*Config {
+type Rafts []*RaftNode
+var mockCluster *mock.MockCluster
+
+
+func expect(t *testing.T, found interface{}, expected interface{}, msg string) {
+	//if a.(type) != b.(type) {
+	//  t.Errorf("Type mismatch, %v & %v", a.(type), b.(type))
+	//} else
+	if found != expected {
+		t.Errorf("Expected %v, found %v : %v", expected, found, msg) // t.Error is visible when running `go test -verbose`
+	}
+}
+
+func makeConfigs() []*Config {/*
 	var nodeNetAddrList []NodeNetAddr
 	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:1, Host:"localhost", Port:7001} )
 	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:2, Host:"localhost", Port:7002} )
 	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:3, Host:"localhost", Port:7003} )
 	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:4, Host:"localhost", Port:7004} )
-	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:5, Host:"localhost", Port:7005} )
+	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:5, Host:"localhost", Port:7005} )*/
+
+	var err error
+	mockCluster, err = mock.NewCluster(nil)
+	if err != nil {
+		prnt("Error in creating CLUSTER : %v", err.Error())
+	}
+
 
 	configBase := Config {
-		NodeNetAddrList 	:nodeNetAddrList,
+		//NodeNetAddrList 	:nodeNetAddrList,
 		Id                  :1,
 		LogDir              :"log file",          // Log file directory for this node
 		ElectionTimeout     :500,
-		HeartbeatTimeout    :200}
+		HeartbeatTimeout    :200,
+		NumOfNodes 	    :5}
 
 	var configs []*Config
 	for i:=1 ; i<=5 ; i++ {
-		config := configBase
+		config := configBase // Copy config
 		config.Id = i
 		config.LogDir = "/tmp/raft/node"+strconv.Itoa(i)
+		mockCluster.AddServer(i)
+		config.mockServer = mockCluster.Servers[i]
 		prnt("Creating Config %v", config.Id)
 		configs = append(configs,&config)
 	}
 	return configs
 }
+
 
 func makeRafts() Rafts {
 	var rafts Rafts
@@ -49,7 +74,7 @@ func makeRafts() Rafts {
 	return rafts
 }
 
-func shutdownRafts (rafts Rafts) {
+func (rafts Rafts) shutdownRafts () {
 	for _, r := range rafts {
 		//prnt("%+v", r)
 		r.Shutdown()
@@ -61,7 +86,7 @@ func cleanupLogs(){
 
 // Gets stable leader, i.e. Only ONE leader is present and all other nodes are in follower state of that term
 // If no stable leader is elected after 10 sec, error
-func getLeader(t *testing.T, rafts Rafts) (*RaftNode) {
+func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
 	var ldr *RaftNode
 	var ldrTerm int
 
@@ -71,7 +96,7 @@ func getLeader(t *testing.T, rafts Rafts) (*RaftNode) {
 	for {
 		select {
 		case <-abortCh.C:	// listen on abort channel for abort timeout
-			shutdownRafts(rafts)
+			rafts.shutdownRafts()
 			t.Fatalf("No stable leader elected after 5 seconds")
 		default:
 			ldrTerm = 0;
@@ -130,7 +155,7 @@ func (rafts Rafts) checkSingleCommit (t *testing.T, data string) {
 		// Check for all nodes
 		select {
 		case <-abortCh.C:
-			shutdownRafts(rafts)
+			rafts.shutdownRafts()
 			t.Fatalf("Commit msg not received on all nodes after 5 seconds")
 		default:
 		//prnt("Checking if commit msg received")
@@ -144,14 +169,15 @@ func (rafts Rafts) checkSingleCommit (t *testing.T, data string) {
 						select {
 						case ci := <-node.CommitChannel:
 							if ci.err != "" {
-								t.Fatalf(ci.err)
+								prnt("Unable to commit the log : %v", ci.err)
+							} else {
+								prnt("Commit received at commit channel of %v", node.GetId())
 							}
-							if string(ci.data.Data.([]byte)) != data {
-								t.Fatalf("Got different data : expected %v , received : %v", data, string(ci.data.Data.([]byte)))
-							}
-							prnt("Commit received at commit channel of %v", node.GetId())
 							checked[i] = true // Ignore from future consideration
 							checkedNum++
+							if ci.data.Data != data {
+								t.Fatalf("Got different data : expected %v , received : %v", data, ci.data.Data)
+							}
 						}
 					}
 				}

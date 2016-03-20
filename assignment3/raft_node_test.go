@@ -7,72 +7,81 @@ import (
 
 
 
-type Rafts []*RaftNode
 
-func TestBasic (t *testing.T) {
-	defer cleanupLogs()
+func weTestBasic (t *testing.T) {
+	cleanupLogs()
 	rafts := makeRafts() 		// array of []RaftNode
 	prnt("Rafts created")
-	ldr:= getLeader(t, rafts)	// Wait until a stable leader is elected
-	ldr.Append([]byte("foo"))	// Append to leader
-	ldr = getLeader(t, rafts)	// Again wait for stable leader
+	ldr:= rafts.getLeader(t)	// Wait until a stable leader is elected
+	ldr.Append("foo")	// Append to leader
+	ldr = rafts.getLeader(t)	// Again wait for stable leader
 	rafts.checkSingleCommit(t,"foo")// Wait until next single append is commited on all nodes
-	shutdownRafts(rafts)
+	rafts.shutdownRafts()
 }
 
 
-
 func TestLeaderReelection (t *testing.T) {
-	defer cleanupLogs()
+	cleanupLogs()
 	rafts := makeRafts() // array of []RaftNode
 	prnt("Rafts created")
-	ldr := getLeader(t, rafts)
+	ldr := rafts.getLeader(t)
 	ldr.Shutdown()
-	ldr = getLeader(t, rafts)
-	ldr.Append([]byte("foo"))
+	ldr = rafts.getLeader(t)
+	ldr.Append("foo")
 	rafts.checkSingleCommit(t,"foo")
-	ldr.Shutdown()
-	shutdownRafts(rafts)
+	rafts.shutdownRafts()
 }
 
 
 func TestServerStateRestore (t *testing.T) {
-	//defer cleanupLogs()
+	cleanupLogs()
 	rafts := makeRafts() // array of []RaftNode
 	prnt("Rafts created")
 
-	ldr := getLeader(t, rafts)
-	ldr.Append([]byte("foo"))
+	ldr := rafts.getLeader(t)
+	ldr.Append("foo")
 	rafts.checkSingleCommit(t,"foo")
 
-	ldr = getLeader(t, rafts)
-	ldr.Append([]byte("bar"))
+
+	ldr = rafts.getLeader(t)
+
+
+	ldr.Append("bar")
 	rafts.checkSingleCommit(t,"bar")
 
-	ldr = getLeader(t, rafts)
-	ldr.Append([]byte("foo1"))
+	ldr = rafts.getLeader(t)
+	ldr.Append("foo1")
 	rafts.checkSingleCommit(t,"foo1")
 
-	ldr = getLeader(t, rafts)
-	ldr.Append([]byte("bar1"))
+	ldr = rafts.getLeader(t)
+	ldr.Append("bar1")
 	rafts.checkSingleCommit(t,"bar1")
 
 
-	ldr = getLeader(t, rafts)
+	ldr = rafts.getLeader(t)
 	ldr_id := ldr.GetId()
 	ldr_index := ldr_id-1
 
 	ldr.Shutdown()
-	ldr = getLeader(t, rafts)
+	ldr = rafts.getLeader(t)
 
 	config, err := FromConfigFile("/tmp/raft/node" + strconv.Itoa(ldr_id) + "/config.json")
+	prnt("Node config read : %+v", config)
 	if err!=nil {
 		t.Fatalf("Error reopening config : %v", err.Error())
 	}
+	config.mockServer = mockCluster.Servers[config.Id]
+	//config.mockServer.Heal()
 	rafts[ldr_index] = config.RestoreServerState()
 	rafts[ldr_index].Start()
 
+	expect(t, rafts[ldr_index].server_state.logs[1].Data , "foo", "Log mismatch after restarting server")
+	expect(t, rafts[ldr_index].server_state.logs[2].Data , "bar", "Log mismatch after restarting server")
+	expect(t, rafts[ldr_index].server_state.logs[3].Data , "foo1", "Log mismatch after restarting server")
+	expect(t, rafts[ldr_index].server_state.logs[4].Data , "bar1", "Log mismatch after restarting server")
 
 	ldr.Shutdown()
-	shutdownRafts(rafts)
+	rafts.shutdownRafts()
 }
+
+
