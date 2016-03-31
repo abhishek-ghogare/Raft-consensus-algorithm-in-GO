@@ -1,9 +1,9 @@
 package main
 
 import (
-    "testing"
+    	"testing"
 	"time"
-"math/rand"
+	"math/rand"
 )
 
 
@@ -51,7 +51,7 @@ func TestNetworkPartition (t *testing.T) {
 func TestBasic (t *testing.T) {
 	cleanupLogs()
 	rafts := makeRafts() 		// array of []RaftNode
-	prnt("Rafts created")
+	log_info("Rafts created")
 	ldr:= rafts.getLeader(t)	// Wait until a stable leader is elected
 	ldr.Append("foo")	// Append to leader
 	ldr = rafts.getLeader(t)	// Again wait for stable leader
@@ -105,10 +105,10 @@ func TestServerStateRestore (t *testing.T) {
 	ldr = rafts.getLeader(t)
 	rafts.restoreRaft(t,ldr_id)
 
-	expect(t, rafts[ldr_index].server_state.logs[1].Data , "foo", "Log mismatch after restarting server")
-	expect(t, rafts[ldr_index].server_state.logs[2].Data , "bar", "Log mismatch after restarting server")
-	expect(t, rafts[ldr_index].server_state.logs[3].Data , "foo1", "Log mismatch after restarting server")
-	expect(t, rafts[ldr_index].server_state.logs[4].Data , "bar1", "Log mismatch after restarting server")
+	expect(t, rafts[ldr_index].GetLogAt(1).Data , "foo", "Log mismatch after restarting server")
+	expect(t, rafts[ldr_index].GetLogAt(2).Data , "bar", "Log mismatch after restarting server")
+	expect(t, rafts[ldr_index].GetLogAt(3).Data , "foo1", "Log mismatch after restarting server")
+	expect(t, rafts[ldr_index].GetLogAt(4).Data , "bar1", "Log mismatch after restarting server")
 
 	ldr.Shutdown()
 	rafts.shutdownRafts()

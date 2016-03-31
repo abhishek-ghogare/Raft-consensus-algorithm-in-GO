@@ -6,10 +6,23 @@ import (
 	"strconv"
 	"os"
 	"github.com/cs733-iitb/cluster/mock"
+	rsm "cs733/assignment3/raft_state_machine"
+	rn "cs733/assignment3/raft_node"
+	"cs733/assignment3/logging"
 )
 
 
-type Rafts []*RaftNode
+func log_error(format string, args ...interface{}) {
+	logging.Error("[TEST] : " + format, args...)
+}
+func log_info(format string, args ...interface{}) {
+	logging.Info("[TEST] : " + format, args...)
+}
+func log_warning(format string, args ...interface{}) {
+	logging.Warning("[TEST] : " + format, args...)
+}
+
+type Rafts []* rn.RaftNode
 var mockCluster *mock.MockCluster
 
 
@@ -22,22 +35,15 @@ func expect(t *testing.T, found interface{}, expected interface{}, msg string) {
 	}
 }
 
-func makeConfigs() []*Config {/*
-	var nodeNetAddrList []NodeNetAddr
-	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:1, Host:"localhost", Port:7001} )
-	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:2, Host:"localhost", Port:7002} )
-	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:3, Host:"localhost", Port:7003} )
-	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:4, Host:"localhost", Port:7004} )
-	nodeNetAddrList = append(nodeNetAddrList, NodeNetAddr {Id:5, Host:"localhost", Port:7005} )*/
-
+func makeConfigs() []* rsm.Config {
 	var err error
 	mockCluster, err = mock.NewCluster(nil)
 	if err != nil {
-		prnt("Error in creating CLUSTER : %v", err.Error())
+		log_error("Error in creating CLUSTER : %v", err.Error())
 	}
 
 
-	configBase := Config {
+	configBase := rsm.Config {
 		//NodeNetAddrList 	:nodeNetAddrList,
 		Id                  :1,
 		LogDir              :"log file",          // Log file directory for this node
@@ -45,14 +51,14 @@ func makeConfigs() []*Config {/*
 		HeartbeatTimeout    :200,
 		NumOfNodes 	    :5}
 
-	var configs []*Config
+	var configs []* rsm.Config
 	for i:=1 ; i<=5 ; i++ {
 		config := configBase // Copy config
 		config.Id = i
 		config.LogDir = "/tmp/raft/node"+strconv.Itoa(i)
 		mockCluster.AddServer(i)
-		config.mockServer = mockCluster.Servers[i]
-		prnt("Creating Config %v", config.Id)
+		config.MockServer = mockCluster.Servers[i]
+		log_info("Creating Config %v", config.Id)
 		configs = append(configs,&config)
 	}
 	return configs
@@ -62,10 +68,10 @@ func makeConfigs() []*Config {/*
 func makeRafts() Rafts {
 	var rafts Rafts
 	for _, config := range makeConfigs() {
-		raft := config.NewRaftNode()
-		err := ToConfigFile(config.LogDir+"/config.json",*config)
+		raft := rn.NewRaftNode(config)
+		err := rn.ToConfigFile(config.LogDir+"/config.json",*config)
 		if err != nil {
-			prnt("Error in storing config to file : %v", err.Error())
+			log_error("Error in storing config to file : %v", err.Error())
 		}
 		raft.Start()
 		rafts = append(rafts,raft)
@@ -75,8 +81,8 @@ func makeRafts() Rafts {
 }
 
 func (rafts Rafts) shutdownRafts () {
+	log_info("Shutting down all rafts")
 	for _, r := range rafts {
-		//prnt("%+v", r)
 		r.Shutdown()
 	}
 }
@@ -86,16 +92,16 @@ func cleanupLogs(){
 
 // Gets stable leader, i.e. Only ONE leader is present and all other nodes are in follower state of that term
 // If no stable leader is elected after timeout, return the current leader
-func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
+func (rafts Rafts) getLeader(t *testing.T) (* rn.RaftNode) {
 	time.Sleep(1*time.Second)
-	var ldr *RaftNode
+	var ldr * rn.RaftNode
 
 	// Set 10 sec time span to probe the stable leader
 	abortCh := time.NewTimer(4*time.Second)
 	for {
 		select {
 		case <-abortCh.C:	// listen on abort channel for abort timeout
-			prnt("Stable leader NOT found : %v", ldr.server_state.Server_id)
+			log_warning("Stable leader NOT found : %v", ldr.GetId())
 			abortCh.Stop()
 			return ldr
 		default:
@@ -107,7 +113,7 @@ func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
 				if node.GetId() != ldr.GetId() && node.IsNodeUp() {
 					// Ignore the leader for this check
 					// or if node is down
-					if node.server_state.myState != FOLLOWER ||
+					if node.GetServerState() != rsm.FOLLOWER ||
 					node.GetCurrentTerm() != ldr.GetCurrentTerm() {
 						// If this node is not follower
 						// or if this node is not follower of the leader
@@ -118,7 +124,7 @@ func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
 			}
 
 			if areAllFollowers {
-				prnt("Stable leader found : %v", ldr.server_state.Server_id)
+				log_info("Stable leader found : %v", ldr.GetId())
 				abortCh.Stop()
 				return ldr
 			}
@@ -127,8 +133,8 @@ func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
 	return ldr
 }
 
-func (rafts Rafts) getCurrentLeader(t *testing.T) (*RaftNode) {
-	var ldr *RaftNode
+func (rafts Rafts) getCurrentLeader(t *testing.T) (*rn.RaftNode) {
+	var ldr *rn.RaftNode
 	var ldrTerm int
 
 	// Set 10 sec time span to probe the stable leader
@@ -184,19 +190,19 @@ func (rafts Rafts) checkSingleCommit (t *testing.T, data string) {
 					if ! node.IsNodeUp() { // if node is down then ignore it
 						checked[i] = true
 						checkedNum++
-						prnt("Node is down, ignoring commit for this %v", node.GetId())
+						log_warning("Node is down, ignoring commit for this %v", node.GetId())
 					} else {
 						select {
 						case ci := <-node.CommitChannel:
-							if ci.err != "" {
-								prnt("Unable to commit the log : %v", ci.err)
+							if ci.Err != "" {
+								log_warning("Unable to commit the log : %v", ci.Err)
 							} else {
-								prnt("Commit received at commit channel of %v", node.GetId())
+								log_info("Commit received at commit channel of %v", node.GetId())
 							}
 							checked[i] = true // Ignore from future consideration
 							checkedNum++
-							if ci.data.Data != data {
-								t.Fatalf("Got different data : expected %v , received : %v", data, ci.data.Data)
+							if ci.Data.Data != data {
+								t.Fatalf("Got different data : expected %v , received : %v", data, ci.Data.Data)
 							}
 						default:
 						}
@@ -212,14 +218,14 @@ func (rafts Rafts) checkSingleCommit (t *testing.T, data string) {
 func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 	node_index := node_id-1
 
-	config, err := FromConfigFile("/tmp/raft/node" + strconv.Itoa(node_id) + "/config.json")
-	prnt("Node config read : %+v", config)
+	config, err := rn.FromConfigFile("/tmp/raft/node" + strconv.Itoa(node_id) + "/config.json")
+	log_info("Node config read : %+v", config)
 	if err!=nil {
 		t.Fatalf("Error reopening config : %v", err.Error())
 	}
-	config.mockServer = mockCluster.Servers[config.Id]
+	config.MockServer = mockCluster.Servers[config.Id]
 	//config.mockServer.Heal()
-	rafts[node_index] = config.RestoreServerState()
+	rafts[node_index] = rn.RestoreServerState(config)
 	rafts[node_index].Start()
 
 }
