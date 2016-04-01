@@ -13,58 +13,46 @@ import (
     "errors"
     "strconv"
     "github.com/cs733-iitb/cluster/mock"
-   rsm "cs733/assignment3/raft_state_machine"
+    rsm "cs733/assignment3/raft_state_machine"
     "cs733/assignment3/logging"
     "fmt"
 )
 
-
 func (rn RaftNode) log_error(format string, args ...interface{}) {
-    format = fmt.Sprintf( "[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
-    logging.Error( format, args...)
+    format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
+    logging.Error(format, args...)
 }
 func (rn RaftNode) log_info(format string, args ...interface{}) {
-    format = fmt.Sprintf( "[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
+    format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
     logging.Info(format, args...)
 }
 func (rn RaftNode) log_warning(format string, args ...interface{}) {
-    format = fmt.Sprintf( "[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
+    format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
     logging.Warning(format, args...)
 }
 
-
-
-type RaftNode struct { // implements Node interface
+type RaftNode struct {
+                           // implements Node interface
     eventCh         chan interface{}
     timeoutCh       chan interface{}
-    //config          Config
-    LogDir          string          // Log file directory for this node
+                           //config          Config
+    LogDir          string // Log file directory for this node
     server_state    *rsm.ServerState
     clusterServer   *mock.MockServer
     logs            *log.Log
     timer           *time.Timer
 
-    // A channel for client to listen on. What goes into Append must come out of here at some point.
+                           // A channel for client to listen on. What goes into Append must come out of here at some point.
     CommitChannel   chan rsm.CommitAction
     ShutdownChannel chan int
     isUp            bool
     isInitialized   bool
 
-    // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
+                           // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
     waitShutdown    sync.WaitGroup
-
 }
 
-// Last known committed index in the log.  This is 0 until the system stabilizes.
-func (rn *RaftNode) CommittedIndex() int {
-    if rn.IsNodeUp() {
-        return rn.server_state.CommitIndex
-    } else {
-        return 0
-    }
-}
-
-func ToConfigFile(configFile string, config rsm.Config) (err error){
+func ToConfigFile(configFile string, config rsm.Config) (err error) {
     var f *os.File
     if f, err = os.Create(configFile); err != nil {
         return err
@@ -72,12 +60,12 @@ func ToConfigFile(configFile string, config rsm.Config) (err error){
     defer f.Close()
     enc := json.NewEncoder(f)
     if err = enc.Encode(config); err != nil {
-        return  err
+        return err
     }
     return nil
 }
 
-func FromConfigFile(configuration interface{}) (config *rsm.Config, err error){
+func FromConfigFile(configuration interface{}) (config *rsm.Config, err error) {
     var cfg rsm.Config
     var ok bool
     var configFile string
@@ -101,9 +89,9 @@ func FromConfigFile(configuration interface{}) (config *rsm.Config, err error){
 
 // Client's message to Raft node
 func (rn *RaftNode) Append(data string) {
-                //fmt.Println("channel in append ", &rn.eventCh)
+    //fmt.Println("channel in append ", &rn.eventCh)
     rn.eventCh <- rsm.AppendEvent{Data: data}
-                //fmt.Printf("Hello\n")
+    //fmt.Printf("Hello\n")
 }
 
 func (rn *RaftNode) processEvents() {
@@ -119,39 +107,40 @@ func (rn *RaftNode) processEvents() {
     }
 
     RegisterEncoding()
-    rn.timer = time.NewTimer(time.Duration(rn.server_state.ElectionTimeout +rand.Intn(400))*time.Millisecond)
+    rn.timer = time.NewTimer(time.Duration(rn.server_state.ElectionTimeout + rand.Intn(rsm.RandomTimeout)) * time.Millisecond)
     rn.isUp = true
     for {
         var ev interface{}
         select {
-        case ev = <- rn.timer.C :
+        case ev = <-rn.timer.C:
             actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
-        case ev = <- rn.eventCh :
+        case ev = <-rn.eventCh:
             rn.log_info("Append request received")
             actions := rn.server_state.ProcessEvent(ev)
             rn.doActions(actions)
-        case ev = <- (*rn.clusterServer).Inbox() :
+        case ev = <-(*rn.clusterServer).Inbox():
             ev := ev.(*cluster.Envelope)
 
-            // Debug logging
+        // Debug logging
             switch ev.Msg.(type) {
             case rsm.AppendRequestEvent:
                 rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
             case rsm.AppendRequestRespEvent:
                 rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
             case rsm.RequestVoteEvent :
-                //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             case rsm.RequestVoteRespEvent :
-                //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             }
 
-            //rn.prnt("InboxEvent  : from %v \"%v\" \t\t%v", ev.Pid, reflect.TypeOf(ev.Msg).Name(), ev)
+        //rn.prnt("InboxEvent  : from %v \"%v\" \t\t%v", ev.Pid, reflect.TypeOf(ev.Msg).Name(), ev)
             event := ev.Msg.(interface{})
             actions := rn.server_state.ProcessEvent(event)
             rn.doActions(actions)
-        case _, ok := <- rn.ShutdownChannel:
-            if !ok {    // If channel closed, return from function
+        case _, ok := <-rn.ShutdownChannel:
+            if !ok {
+                // If channel closed, return from function
                 close(rn.CommitChannel)
                 close(rn.eventCh)
                 close(rn.timeoutCh)
@@ -162,8 +151,8 @@ func (rn *RaftNode) processEvents() {
                 return
             }
         //default:
-            //fmt.Printf("Hello %v\n", rn.config.Id)
-            //rn.eventCh <- timeoutEvent{}
+        //fmt.Printf("Hello %v\n", rn.config.Id)
+        //rn.eventCh <- timeoutEvent{}
         }
     }
 }
@@ -172,7 +161,7 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
 
     //var timer *Timer
 
-    for _,action := range actions {
+    for _, action := range actions {
         switch action.(type) {
         case rsm.SendAction :
             action := action.(rsm.SendAction)
@@ -206,20 +195,20 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             lastInd := int(rn.logs.GetLastIndex())
             if lastInd >= action.Index {
                 rn.logs.TruncateToEnd(int64(action.Index)) // Truncate extra entries
-            } else if lastInd < action.Index-1 {
+            } else if lastInd < action.Index - 1 {
                 rn.log_error("Log inconsistency found")
             }
             rn.logs.Append(action.Data)
         case rsm.AlarmAction :
             action := action.(rsm.AlarmAction)
-            rn.timer.Reset(time.Duration(action.Time)*time.Millisecond)
+            rn.timer.Reset(time.Duration(action.Time) * time.Millisecond)
         default:
 
         }
     }
 }
 
-func RegisterEncoding () {
+func RegisterEncoding() {
     gob.Register(rsm.AppendRequestEvent{})
     gob.Register(rsm.AppendRequestRespEvent{})
     gob.Register(rsm.RequestVoteEvent{})
@@ -241,7 +230,7 @@ func (rn *RaftNode) Shutdown() {
     }
 
     err := ToServerStateFile("/tmp/raft/node" + strconv.Itoa(rn.GetId()) + "/serverState.json", rn.server_state) // TODO:: temp patch
-    if err!=nil {
+    if err != nil {
         rn.log_error("Failed to store server state : %v", err.Error())
     } else {
         rn.log_info("Server state stored on file")
@@ -257,7 +246,7 @@ func (rn *RaftNode) Shutdown() {
 
 func (rn *RaftNode) GetId() int {
     if rn.IsNodeInitialized() {
-        return rn.server_state.Server_id
+        return rn.server_state.GetServerId()
     } else {
         return 0;
     }
@@ -269,7 +258,7 @@ func (rn *RaftNode) GetLogAt(index int) rsm.LogEntry {
     }
 
     log, err := rn.logs.Get(int64(index))
-    if err!=nil {
+    if err != nil {
         return rsm.LogEntry{};
     }
 
@@ -299,5 +288,5 @@ func (rn *RaftNode) IsNodeInitialized() bool {
     return rn.isInitialized
 }
 func (rn *RaftNode) IsLeader() bool {
-    return rn.IsNodeUp() && (rn.server_state.GetServerState() ==rsm.LEADER)
+    return rn.IsNodeUp() && (rn.server_state.GetServerState() == rsm.LEADER)
 }
