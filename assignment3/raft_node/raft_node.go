@@ -8,9 +8,6 @@ import (
     "reflect"
     "time"
     "sync"
-    "os"
-    "encoding/json"
-    "errors"
     "strconv"
     "github.com/cs733-iitb/cluster/mock"
     rsm "cs733/assignment3/raft_state_machine"
@@ -30,6 +27,7 @@ func (rn RaftNode) log_warning(format string, args ...interface{}) {
     format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
     logging.Warning(format, args...)
 }
+
 
 type RaftNode struct {
                            // implements Node interface
@@ -52,46 +50,10 @@ type RaftNode struct {
     waitShutdown    sync.WaitGroup
 }
 
-func ToConfigFile(configFile string, config rsm.Config) (err error) {
-    var f *os.File
-    if f, err = os.Create(configFile); err != nil {
-        return err
-    }
-    defer f.Close()
-    enc := json.NewEncoder(f)
-    if err = enc.Encode(config); err != nil {
-        return err
-    }
-    return nil
-}
-
-func FromConfigFile(configuration interface{}) (config *rsm.Config, err error) {
-    var cfg rsm.Config
-    var ok bool
-    var configFile string
-    if configFile, ok = configuration.(string); ok {
-        var f *os.File
-        if f, err = os.Open(configFile); err != nil {
-            return nil, err
-        }
-        defer f.Close()
-        dec := json.NewDecoder(f)
-        if err = dec.Decode(&cfg); err != nil {
-            return nil, err
-        }
-    } else if cfg, ok = configuration.(rsm.Config); !ok {
-        return nil, errors.New("Expected a configuration.json file or a Config structure")
-    }
-    return &cfg, nil
-}
-
-
 
 // Client's message to Raft node
 func (rn *RaftNode) Append(data string) {
-    //fmt.Println("channel in append ", &rn.eventCh)
     rn.eventCh <- rsm.AppendEvent{Data: data}
-    //fmt.Printf("Hello\n")
 }
 
 func (rn *RaftNode) processEvents() {
@@ -134,7 +96,6 @@ func (rn *RaftNode) processEvents() {
             //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             }
 
-        //rn.prnt("InboxEvent  : from %v \"%v\" \t\t%v", ev.Pid, reflect.TypeOf(ev.Msg).Name(), ev)
             event := ev.Msg.(interface{})
             actions := rn.server_state.ProcessEvent(event)
             rn.doActions(actions)
@@ -177,8 +138,6 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             case rsm.RequestVoteRespEvent :
                 rn.log_info("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
             }
-            //rn.prnt("OutboxEvent : to   %v \"%v\"\t\t%v", action.toId, reflect.TypeOf(action.event).Name(), action.event)
-
 
             if action.ToId == -1 {
                 (*rn.clusterServer).Outbox() <- &cluster.Envelope{Pid:cluster.BROADCAST, Msg:action.Event}
@@ -198,10 +157,13 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             } else if lastInd < action.Index - 1 {
                 rn.log_error("Log inconsistency found")
             }
-            rn.logs.Append(action.Data)
+            rn.logs.Append(rsm.LogEntry{Index:action.Index, Term:action.Term, Data:action.Data})
         case rsm.AlarmAction :
             action := action.(rsm.AlarmAction)
             rn.timer.Reset(time.Duration(action.Time) * time.Millisecond)
+        case rsm.StateStore:
+            rn.log_info("state store received")
+            rn.server_state.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
         default:
 
         }
@@ -228,13 +190,13 @@ func (rn *RaftNode) Shutdown() {
         rn.log_warning("Already down")
         return
     }
-
-    err := ToServerStateFile("/tmp/raft/node" + strconv.Itoa(rn.GetId()) + "/serverState.json", rn.server_state) // TODO:: temp patch
+/*
+    err := rn.server_state.ToServerStateFile("/tmp/raft/node" + strconv.Itoa(rn.GetId()) + "/serverState.json") // TODO:: temp patch
     if err != nil {
         rn.log_error("Failed to store server state : %v", err.Error())
     } else {
         rn.log_info("Server state stored on file")
-    }
+    }*/
     rn.log_info("Shutting down")
     rn.isUp = false
     rn.isInitialized = false
@@ -252,7 +214,7 @@ func (rn *RaftNode) GetId() int {
     }
 }
 
-func (rn *RaftNode) GetLogAt(index int) rsm.LogEntry {
+func (rn *RaftNode) GetLogAt(index int) rsm.LogEntry { // TODO:: return nil on error
     if ! rn.IsNodeInitialized() {
         return rsm.LogEntry{};
     }
@@ -267,7 +229,7 @@ func (rn *RaftNode) GetLogAt(index int) rsm.LogEntry {
 
 func (rn *RaftNode) GetCurrentTerm() int {
     if rn.IsNodeInitialized() {
-        return rn.server_state.CurrentTerm
+        return rn.server_state.GetCurrentTerm()
     } else {
         return 0
     }

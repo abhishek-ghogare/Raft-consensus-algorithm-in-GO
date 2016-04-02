@@ -34,6 +34,9 @@ type Config struct {
     MockServer       *mock.MockServer
 }
 
+const RaftStateFile = "serverState.json"
+
+
 type RaftState uint
 
 const (
@@ -108,10 +111,12 @@ type CommitAction struct {
     Err   string
 }
 
+type LogStore LogEntry
+/*
 type LogStore struct {
     Index int
     Data  LogEntry // Data is of LogEntry type
-}
+}*/
 
 // Store state machine on persistent store
 type StateStore struct {
@@ -154,7 +159,7 @@ type ServerState struct {
     HeartbeatTimeout int
 }
 
-func FromServerStateFile(serverStateFile string) (serState *ServerState, err error) {
+func fromServerStateFile(serverStateFile string) (serState *ServerState, err error) {
     var state ServerState
     var f *os.File
 
@@ -170,6 +175,19 @@ func FromServerStateFile(serverStateFile string) (serState *ServerState, err err
         return nil, err
     }
     return &state, nil
+}
+
+func (serState *ServerState) ToServerStateFile(serverStateFile string) (err error) {
+    var f *os.File
+    if f, err = os.Create(serverStateFile); err != nil {
+        return err
+    }
+    defer f.Close()
+    enc := json.NewEncoder(f)
+    if err = enc.Encode(serState); err != nil {
+        return err
+    }
+    return nil
 }
 
 func New(config *Config) (server *ServerState) {
@@ -198,7 +216,7 @@ func New(config *Config) (server *ServerState) {
 func Restore(config *Config) (server *ServerState) {
 
     // Restore from file
-    restored_state, err := FromServerStateFile(config.LogDir + "/serverState.json")
+    restored_state, err := fromServerStateFile(config.LogDir + RaftStateFile)
     if err != nil {
         restored_state.log_error("Unable to restore server state : %v", err.Error())
         return nil
@@ -242,6 +260,10 @@ func (server *ServerState) getLastLog() LogEntry {
 func (server *ServerState) GetServerState() RaftState {
     return server.myState
 }
+//  Returns current term
+func (server *ServerState) GetCurrentTerm() int {
+    return server.CurrentTerm
+}
 func (server *ServerState) GetServerId() int {
     return server.server_id
 }
@@ -277,6 +299,16 @@ func (server *ServerState) voteRequest(event RequestVoteEvent) []interface{} {
 
     actions := make([]interface{}, 0)
 
+    // Track if persistent state of raft state machine changes
+    state_changed_flag := false
+    // Check and store state on persistent store
+    defer func() {
+        if state_changed_flag {
+            // Prepend StateStore action
+            actions = append([]interface{}{StateStore{}}, actions...)
+        }
+    }()
+
     if event.Term < server.CurrentTerm {
         // In any state, if old termed candidate request vote, tell it to be a follower
         voteResp := RequestVoteRespEvent{FromId: server.server_id, Term: server.CurrentTerm, VoteGranted: false}
@@ -288,6 +320,7 @@ func (server *ServerState) voteRequest(event RequestVoteEvent) []interface{} {
         server.CurrentTerm = event.Term
         server.myState = FOLLOWER
         server.VotedFor = -1
+        state_changed_flag = true
     }
 
     // requester_term >= server.current_term
@@ -296,6 +329,8 @@ func (server *ServerState) voteRequest(event RequestVoteEvent) []interface{} {
         // votedFor will be -1 ONLY for follower state, in case of leader/candidate it will be set to self id
         if event.LastLogTerm > server.getLastLog().Term || event.LastLogTerm == server.getLastLog().Term && event.LastLogIndex >= server.getLastLog().Index {
             server.VotedFor = event.FromId
+            server.CurrentTerm = event.Term
+            state_changed_flag = true
 
             voteResp := RequestVoteRespEvent{FromId: server.server_id, Term: server.CurrentTerm, VoteGranted: true}
             resp := SendAction{ToId: event.FromId, Event: voteResp}
@@ -331,11 +366,22 @@ func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) []int
 
     actions := make([]interface{}, 0)
 
+    // Track if persistent state of raft state machine changes
+    state_changed_flag := false
+    // Check and store state on persistent store
+    defer func() {
+        if state_changed_flag {
+            // Prepend StateStore action
+            actions = append([]interface{}{StateStore{}}, actions...)
+        }
+    }()
+
     if server.CurrentTerm < event.Term {
         // This server term is not so up-to-date, so update
         server.myState = FOLLOWER
         server.CurrentTerm = event.Term
         server.VotedFor = -1
+        state_changed_flag = true
 
         alarm := AlarmAction{Time: server.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
@@ -410,8 +456,18 @@ func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) []int
  *                                                                  *
  ********************************************************************/
 func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{} {
-
     actions := make([]interface{}, 0)
+
+    // Track if persistent state of raft state machine changes
+    state_changed_flag := false
+    // Check and store state on persistent store
+    defer func() {
+        if state_changed_flag {
+            // Prepend StateStore action
+            actions = append([]interface{}{StateStore{}}, actions...)
+        }
+    }()
+
 
     if server.CurrentTerm > event.Term {
         // Append request is not from latest leader
@@ -448,6 +504,7 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
             // This server term is not so up-to-date, so update
             server.CurrentTerm = event.Term
             server.VotedFor = -1
+            state_changed_flag = true
         }
 
         // HERTBEAT check disabled
@@ -463,7 +520,7 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
                return actions
            }*/
 
-        // Check if previous entries are missing
+        // Check if previous entries are missing TODO:: prevent direct access of logs
         if server.getLastLog().Index < event.PrevLogIndex || server.logs[event.PrevLogIndex].Term != event.PrevLogTerm {
             // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
             appendResp := AppendRequestRespEvent{FromId: server.server_id, Term: server.CurrentTerm, Success: false, LastLogIndex: server.getLastLog().Index}
@@ -489,7 +546,7 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
         server.logs = append(server.logs, event.Entries...)
 
         for _, log := range event.Entries {
-            action := LogStore{Index: log.Index, Data: log}
+            action := LogStore{Index: log.Index, Term: log.Term, Data: log.Data}
             actions = append(actions, action)
         }
 
@@ -518,7 +575,11 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
     // If the append request is heartbeat then ignore responding to it
     // We are updating matchIndex and nextIndex on positive appendRequestResponse, so consume heartbeats
     if len(event.Entries) != 0 {
-        appendResp := AppendRequestRespEvent{FromId: server.server_id, Term: server.CurrentTerm, Success: true, LastLogIndex: server.getLastLog().Index}
+        appendResp := AppendRequestRespEvent{
+            FromId      : server.server_id,
+            Term        : server.CurrentTerm,
+            Success     : true,
+            LastLogIndex: server.getLastLog().Index }
         resp := SendAction{ToId: event.FromId, Event: appendResp}
         actions = append(actions, resp)
     }
@@ -534,12 +595,23 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
 
     actions := make([]interface{}, 0)
 
+    // Track if persistent state of raft state machine changes
+    state_changed_flag := false
+    // Check and store state on persistent store
+    defer func() {
+        if state_changed_flag {
+            // Prepend StateStore action
+            actions = append([]interface{}{StateStore{}}, actions...)
+        }
+    }()
+
     // Check term
     if server.CurrentTerm < event.Term {
         // This server term is not so up-to-date, so update
         server.myState = FOLLOWER
         server.CurrentTerm = event.Term
         server.VotedFor = -1
+        state_changed_flag = true
 
         // reset alarm
         alarm := AlarmAction{Time: server.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
@@ -616,6 +688,16 @@ func (server *ServerState) timeout(event TimeoutEvent) []interface{} {
 
     actions := make([]interface{}, 0)
 
+    // Track if persistent state of raft state machine changes
+    state_changed_flag := false
+    // Check and store state on persistent store
+    defer func() {
+        if state_changed_flag {
+            // Prepend StateStore action
+            actions = append([]interface{}{StateStore{}}, actions...)
+        }
+    }()
+
     switch server.myState {
     case LEADER:
         // Send empty appendRequests
@@ -638,6 +720,7 @@ func (server *ServerState) timeout(event TimeoutEvent) []interface{} {
         server.myState = CANDIDATE
         server.CurrentTerm = server.CurrentTerm + 1
         server.VotedFor = server.server_id
+        state_changed_flag = true
         actions = append(actions, AlarmAction{Time: server.ElectionTimeout + rand.Intn(RandomTimeout)})
         server.receivedVote[server.server_id] = server.CurrentTerm // voting to self
 
@@ -677,7 +760,7 @@ func (server *ServerState) appendClientRequest(event AppendEvent) []interface{} 
         server.logs = append(server.logs, log)                          // Append to self log
         server.matchIndex[server.server_id] = server.getLastLog().Index // Update self matchIndex
 
-        actions = append(actions, LogStore{Index: log.Index, Data: log})
+        actions = append(actions, LogStore{Index: log.Index, Term:log.Term, Data: log.Data})
         actions = append(actions, server.broadcast(appendReq)...)
     case CANDIDATE:
     case FOLLOWER:

@@ -27,7 +27,7 @@ const (
     FLAG_CRI            // critical
 )
 
-var logLevel = (FLAG_ERR | FLAG_CRI )
+var logLevel = (FLAG_ERR | FLAG_CRI | FLAG_INF | FLAG_WAR)
 // Enable a log level
 func SetLogFlag(bit LogLevel) {
     logLevel = logLevel | bit
