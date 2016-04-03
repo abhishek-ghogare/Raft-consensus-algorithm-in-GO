@@ -16,13 +16,13 @@ import (
  *
  *   Debug Tools
  */
-func (server ServerState) log_error(format string, args ...interface{}) {
+func (server ServerState) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[SM:%v] %v ", strconv.Itoa(server.server_id), strconv.Itoa(server.CurrentTerm)) + format
-    logging.Error(format, args...)
+    logging.Error(skip, format, args...)
 }
-func (server ServerState) log_info(format string, args ...interface{}) {
+func (server ServerState) log_info(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[SM:%v] %v ", strconv.Itoa(server.server_id), strconv.Itoa(server.CurrentTerm)) + format
-    logging.Info(format, args...)
+    logging.Info(skip, format, args...)
 }
 
 type Config struct {
@@ -139,11 +139,12 @@ type ServerState struct {
 
     // log is initialised with single dummy log, to make life easier in future checking
     // Index starts from 1, as first empty entry is present
-    logs []LogEntry // Using first 0th dummy entry for all arrays
+    logs            []LogEntry  // Using first 0th dummy entry for all arrays
+    PersistentLog   *log.Log    // Persistent log, used to retrieve logs which are not in memory
 
     // Non-persistent state
     server_id   int
-    commitIndex int // initialised to -1
+    commitIndex int       // initialised to -1
     lastApplied int
     nextIndex   []int     // Using first 0th dummy entry for all arrays
     matchIndex  []int     // Using first 0th dummy entry for all arrays
@@ -164,14 +165,14 @@ func fromServerStateFile(serverStateFile string) (serState *ServerState, err err
     var f *os.File
 
     if f, err = os.Open(serverStateFile); err != nil {
-        state.log_error("Unable to open state file : %v", err.Error())
+        state.log_error(3, "Unable to open state file : %v", err.Error())
         return nil, err
     }
     defer f.Close()
 
     dec := json.NewDecoder(f)
     if err = dec.Decode(&state); err != nil {
-        state.log_error("Unable to decode state file : %v", err.Error())
+        state.log_error(3, "Unable to decode state file : %v", err.Error())
         return nil, err
     }
     return &state, nil
@@ -218,7 +219,7 @@ func Restore(config *Config) (server *ServerState) {
     // Restore from file
     restored_state, err := fromServerStateFile(config.LogDir + RaftStateFile)
     if err != nil {
-        restored_state.log_error("Unable to restore server state : %v", err.Error())
+        restored_state.log_error(3, "Unable to restore server state : %v", err.Error())
         return nil
     }
 
@@ -231,11 +232,11 @@ func Restore(config *Config) (server *ServerState) {
     // Restore logs of restored_state from persistent storage
     lg, err := log.Open(config.LogDir)
     if err != nil {
-        new_state.log_error("Unable to open log file : %v\n", err)
+        new_state.log_error(3, "Unable to open log file : %v\n", err)
         return nil
     }
     defer lg.Close()
-
+/*
     new_state.log_info("Log opened, last log index : %+v", lg)
     for i := int64(0); i <= lg.GetLastIndex(); i++ {
         data, err := lg.Get(i) // Read log at index i
@@ -246,14 +247,117 @@ func Restore(config *Config) (server *ServerState) {
         new_state.log_info("Restoring log : %v", data.(LogEntry))
         logEntry := data.(LogEntry) // The data is of LogEntry type
         new_state.logs = append(new_state.logs, logEntry)
+    }*/
+
+    lastLogEntry, err := lg.Get(lg.GetLastIndex())
+    if err != nil {
+        new_state.log_error(3, "Error in reading log : %v", err.Error())
+        return nil
     }
+    new_state.logs = append(new_state.logs, lastLogEntry.(LogEntry))
+    new_state.log_info(3, "Last log from persistent store restored")
 
     return new_state
 }
 
 //  Returns last log entry
-func (server *ServerState) getLastLog() LogEntry {
-    return server.logs[len(server.logs)-1]
+func (server *ServerState) getLastLog() *LogEntry {
+    // logs would never empty, at least one log is always ensured
+    return &server.logs[len(server.logs)-1]
+}
+//  Return log of given index
+func (server *ServerState)getLogOf(index int) *LogEntry {
+    // If index is out of range
+    if index > server.getLastLog().Index || index < 0 {
+        server.log_error(3, "Index is out of range")
+        return nil
+    }
+
+    // If log is not in memory, get it from persistent log
+    if index < server.logs[0].Index {
+        l, e := server.PersistentLog.Get(int64(index))
+        if e!=nil {
+            server.log_error(3, "Persistent log access error : %v", e.Error())
+            return nil
+        } else {
+            j := l.(LogEntry)
+            return &j
+        }
+    }
+
+    // Assuming all log indices are increasing by by 1
+    return &server.logs[index - server.logs[0].Index]
+}
+//  Return all logs from given index(including index) to the end
+func (server *ServerState)getLogsFrom(index int) *[]LogEntry {
+    // If index is out of range
+    if index > server.getLastLog().Index || index < 0 {
+        server.log_error(3, "Index is out of range")
+        return nil
+    }
+
+    logs := []LogEntry{}
+
+    // If logs are not in memory, get it from persistent log
+    if index < server.logs[0].Index {
+        // Get all logs WHICH are NOT in memory but in persistent store
+        for ; index<server.logs[0].Index ; index++ {
+            l, e := server.PersistentLog.Get(int64(index))
+            if e!=nil {
+                server.log_error(3, "Persistent log access error : %v", e.Error())
+                return nil
+            } else {
+                logs = append(logs,l.(LogEntry))
+            }
+        }
+    }
+
+    logs = append(logs, server.logs[index - server.logs[0].Index:]...)
+    // Assuming all log indices are incremental
+    return &logs
+}
+//  Return all logs from given index(including index) to the end
+//  and truncate them from in-memory logs and also from persistent logs
+func (server *ServerState)truncateLogsFrom(index int) *[]LogEntry {
+    logs := server.getLogsFrom(index)
+
+    // If part of to be truncated logs is in persistent store
+    if index < server.logs[0].Index {
+        err := server.PersistentLog.TruncateToEnd(int64(index))
+        if err != nil {
+            server.log_error(3, "Error while truncating persistent logs : %v", err.Error())
+        }
+        // Clear in memory log
+        server.logs = []LogEntry{}
+    } else {
+        server.logs = server.logs[:index - server.logs[0].Index] // s = s[include_start:exclude_end]
+    }
+
+    // Check if logs is empty
+    if len(server.logs) == 0 {
+        // We need to restore at least one log from persistent store, logs should never be empty
+        // Append index-1 th log
+        l, e := server.PersistentLog.Get(int64(index-1))
+        if e != nil {
+            server.log_error(3, "Error while getting log : %v", e.Error())
+            return nil
+        }
+        server.logs = append(server.logs, l.(LogEntry))
+    }
+
+    return logs
+}
+
+//  Set commitIndex, load commitIndex onwards logs into memory from persistent store if not available
+func (server *ServerState) setCommitIndex(commitIndex int) {
+    // if logs after commit index are not loaded,
+    if commitIndex>0 && commitIndex < server.logs[0].Index {
+        // Prepend all logs from commitIndex to server.logs[0].Index
+        server.log_info(3, "Restorig logs from persistent store from index : %v", commitIndex)
+        server.logs = *server.getLogsFrom(commitIndex)
+    }
+    server.log_info(3, "Updating commit index to : %v", commitIndex)
+    server.commitIndex = commitIndex
 }
 
 //  Returns current server state
@@ -428,7 +532,7 @@ func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) []int
             } else if count > server.numberOfNodes/2 {
                 // become leader
 
-                server.log_info("Leader has been elected : %v", server.server_id)
+                server.log_info(3, "Leader has been elected : %v", server.server_id)
                 server.initialiseLeader()
 
                 appendReq := AppendRequestEvent{
@@ -521,7 +625,8 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
            }*/
 
         // Check if previous entries are missing TODO:: prevent direct access of logs
-        if server.getLastLog().Index < event.PrevLogIndex || server.logs[event.PrevLogIndex].Term != event.PrevLogTerm {
+        if server.getLastLog().Index < event.PrevLogIndex ||
+           server.getLogOf(event.PrevLogIndex).Term /*logs[event.PrevLogIndex].Term*/ != event.PrevLogTerm {
             // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
             appendResp := AppendRequestRespEvent{FromId: server.server_id, Term: server.CurrentTerm, Success: false, LastLogIndex: server.getLastLog().Index}
             resp := SendAction{ToId: event.FromId, Event: appendResp}
@@ -533,17 +638,17 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
         if server.getLastLog().Index > event.PrevLogIndex {
             // There are entries from last leaders
             // truncate them up to the end
-            truncatedLogs := server.logs[event.PrevLogIndex+1:]
-            server.logs = server.logs[:event.PrevLogIndex+1]
-            server.log_info("Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
-            for _, log := range truncatedLogs {
+            //truncatedLogs := server.getLogsFrom(event.PrevLogIndex+1)// logs[event.PrevLogIndex+1:] // TODO:: prevent direct access of log
+            truncatedLogs := server.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1] // TODO:: prevent direct access of log
+            server.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
+            for _, log := range *truncatedLogs {
                 action := CommitAction{Index: log.Index, Data: log, Err: "Log truncated"}
                 actions = append(actions, action)
             }
         }
 
         // Update log if entries are not present
-        server.logs = append(server.logs, event.Entries...)
+        server.logs = append(server.logs, event.Entries...) // TODO:: prevent direct access of log
 
         for _, log := range event.Entries {
             action := LogStore{Index: log.Index, Term: log.Term, Data: log.Data}
@@ -553,21 +658,23 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
         if event.LeaderCommit > server.commitIndex {
             var commitFrom, commitUpto int
             // If leader has commited entries, so should this server
-            if event.LeaderCommit < int(len(server.logs)-1) {
+            if event.LeaderCommit <= server.getLastLog().Index {
                 commitFrom = server.commitIndex + 1
                 commitUpto = event.LeaderCommit
             } else {
                 commitFrom = server.commitIndex + 1
-                commitUpto = int(len(server.logs) - 1)
+                commitUpto = server.getLastLog().Index
             }
+
+            // Loads logs from persistent store from commitIndex to end if not in in-memory logs
+            server.setCommitIndex(commitUpto)
 
             // Commit all logs from commitFrom to commitUpto
             for i := commitFrom; i <= commitUpto; i++ {
-                action := CommitAction{Index: i, Data: server.logs[i], Err: ""}
+                action := CommitAction{Index: i, Data: *server.getLogOf(i), Err: ""}
                 actions = append(actions, action)
-                server.log_info("Commiting index %v, data:%v", i, server.logs[i].Data)
+                server.log_info(3, "Commiting index %v, data:%v", i, server.getLogOf(i).Data)
             }
-            server.commitIndex = commitUpto
         }
 
     }
@@ -628,7 +735,7 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
             }
 
             // Resend all logs from the holes to the end
-            prevLog := server.logs[server.nextIndex[event.FromId]-1]
+            prevLog := server.logs[server.nextIndex[event.FromId]-1] // TODO:: prevent direct access of log
             startIndex := server.nextIndex[event.FromId]
             logs := append([]LogEntry{}, server.logs[startIndex:]...) // copy server.log from startIndex to the end to "logs"
             event1 := AppendRequestEvent{
@@ -663,7 +770,8 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
                         actions = append(actions, action)
                     }
 
-                    server.commitIndex = sorted[i]
+                    //server.commitIndex = sorted[i]
+                    server.setCommitIndex(sorted[i])
                     break
                 }
             }
@@ -769,9 +877,11 @@ func (server *ServerState) appendClientRequest(event AppendEvent) []interface{} 
 }
 
 func (server *ServerState) checkLogConsistency() {
-    for i, log := range server.logs {
-        if log.Index != i {
-            server.log_error("Log inconsistency found on server : \n%v", server)
+
+    for i:=1 ; i<len(server.logs) ; i++ {
+        if server.logs[i].Index != server.logs[i-1].Index+1 {
+            server.log_error(3, "Log inconsistency found on server : \n%v", server)
+            return
         }
     }
 }

@@ -8,15 +8,16 @@ import (
 
 // Returns a Node object
 func NewRaftNode(config *rsm.Config) *RaftNode {
-    (&RaftNode{}).log_info("Opening log file : %v", config.LogDir)
+    (&RaftNode{}).log_info(3, "Opening log file : %v", config.LogDir)
     lg, err := log.Open(config.LogDir)
     if err != nil {
-        (&RaftNode{}).log_error("Unable to create log file : %v", err)
+        (&RaftNode{}).log_error(3, "Unable to create log file : %v", err)
         r := RaftNode{}
         return &r
     }
 
     server_state := rsm.New(config)
+    server_state.PersistentLog = lg     // Storing persistent log
 
     raft := RaftNode{
         server_state        : server_state,
@@ -40,14 +41,16 @@ func NewRaftNode(config *rsm.Config) *RaftNode {
 
 func RestoreServerState(config *rsm.Config) *RaftNode {
 
-    server_state := rsm.Restore(config)
+    server_state := rsm.Restore(config) // TODO:: move this down, as we wont need to open the logs in server_state
 
     // Restore logs of server_state from persistent storage
     lg, err := log.Open(config.LogDir)
     if err != nil {
-        (&RaftNode{}).log_error("Unable to open log file : %v\n", err)
+        (&RaftNode{}).log_error(3, "Unable to open log file : %v\n", err)
         return nil
     }
+
+    server_state.PersistentLog = lg     // Storing persistent log
 
     raft := RaftNode{
         server_state        : server_state,
@@ -69,6 +72,6 @@ func RestoreServerState(config *rsm.Config) *RaftNode {
                 break
             }
         }*/
-    raft.log_info("Raft node restored and initialised")
+    raft.log_info(3, "Raft node restored and initialised")
     return &raft
 }

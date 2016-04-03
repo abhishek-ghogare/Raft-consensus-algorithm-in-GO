@@ -27,7 +27,7 @@ const (
     FLAG_CRI            // critical
 )
 
-var logLevel = (FLAG_ERR | FLAG_CRI | FLAG_INF | FLAG_WAR)
+var logLevel = (FLAG_ERR | FLAG_CRI | FLAG_WAR | FLAG_INF )
 // Enable a log level
 func SetLogFlag(bit LogLevel) {
     logLevel = logLevel | bit
@@ -40,9 +40,12 @@ func SetLogLevel(mask LogLevel) {
 
 var logger *log.Logger = log.New(os.Stdout, "", log.Ldate | log.Lmicroseconds)
 
-func logMsg(logType LogLevel, format string, args ...interface{}) {
+// The argument skip is the number of stack frames
+// to ascend, with 0 identifying the caller of Caller.  (For historical reasons the
+// meaning of skip differs between Caller and Callers.)
+func logMsg(skip int, logType LogLevel, format string, args ...interface{}) {
     if logLevel & logType != 0 {
-        pc, fileName, line, _ := runtime.Caller(3)
+        pc, fileName, line, _ := runtime.Caller(skip)
 
         arr := strings.Split(fileName, "/")
         fileName = arr[len(arr) - 1]
@@ -56,16 +59,16 @@ func logMsg(logType LogLevel, format string, args ...interface{}) {
     }
 }
 
-func Error(format string, args ...interface{}) {
-    logMsg(FLAG_ERR, "[ERR] : " + format, args...)
+func Error(skip int, format string, args ...interface{}) {
+    logMsg(skip, FLAG_ERR, "[ERR] : " + format, args...)
 }
-func Info(format string, args ...interface{}) {
-    logMsg(FLAG_INF, "[INF] : " + format, args...)
+func Info(skip int,format string, args ...interface{}) {
+    logMsg(skip, FLAG_INF, "[INF] : " + format, args...)
 }
-func Warning(format string, args ...interface{}) {
-    logMsg(FLAG_WAR, "[War] : " + format, args...)
+func Warning(skip int,format string, args ...interface{}) {
+    logMsg(skip, FLAG_WAR, "[War] : " + format, args...)
 }
-func Critical(format string, args ...interface{}) {
-    logMsg(FLAG_CRI, "[CRI] : " + format, args...)
+func Critical(skip int,format string, args ...interface{}) {
+    logMsg(skip, FLAG_CRI, "[CRI] : " + format, args...)
 }
 

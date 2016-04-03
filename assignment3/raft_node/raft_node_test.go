@@ -4,7 +4,9 @@ import (
     "testing"
     "time"
     "math/rand"
+    "strconv"
 )
+
 
 func Test(t *testing.T) {
     rand.Seed(10)
@@ -26,6 +28,72 @@ func Test(t *testing.T) {
 
     rafts.shutdownRafts()
 }
+
+
+func TestServerStateRestore(t *testing.T) {
+    rand.Seed(10)
+    cleanupLogs()
+    rafts := makeRafts() // array of []RaftNode
+
+
+    ldr := rafts.getLeader(t)
+
+
+    retries:=0
+
+    for i:=1 ; i<=10 ;{
+        ldr = rafts.getLeader(t)
+        ldr.Append(strconv.Itoa(i))
+        err := rafts.checkSingleCommit(t, strconv.Itoa(i))
+        if err != nil {
+            log_warning(3, "Committing msg : %v failed", strconv.Itoa(i))
+            retries++
+            if retries>10 {
+                rafts.shutdownRafts()
+                t.Fatalf("Failed to commit a msg, %v, after 10 retries", strconv.Itoa(i))
+            }
+            continue
+        }
+        i++
+    }
+
+    ldr = rafts.getLeader(t)
+    ldr_id := ldr.GetId()
+    ldr_index := ldr_id - 1
+
+    ldr.Shutdown()
+
+    retries=0
+    for i:=11; i<=20 ;  {
+        ldr = rafts.getLeader(t)
+        ldr.Append(strconv.Itoa(i))
+        err := rafts.checkSingleCommit(t, strconv.Itoa(i))
+        if err != nil {
+            log_warning(3, "Committing msg : %v failed", strconv.Itoa(i))
+            retries++
+            if retries>10 {
+                rafts.shutdownRafts()
+                t.Fatalf("Failed to commit a msg, %v, after 10 retries", strconv.Itoa(i))
+            }
+            continue
+        }
+        i++
+    }
+
+    rafts.restoreRaft(t, ldr_id)
+    time.Sleep(3*time.Second)
+
+
+    expect(t, rafts[ldr_index].GetLogAt(997).Data, "17", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(998).Data, "18", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(999).Data, "19", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(1000).Data, "20", "Log mismatch after restarting server")
+
+    ldr.Shutdown()
+    rafts.shutdownRafts()
+}
+
+
 
 func TestNetworkPartition(t *testing.T) {
     cleanupLogs()
@@ -49,7 +117,7 @@ func TestNetworkPartition(t *testing.T) {
 func TestBasic(t *testing.T) {
     cleanupLogs()
     rafts := makeRafts()        // array of []RaftNode
-    log_info("Rafts created")
+    log_info(3, "Rafts created")
     ldr := rafts.getLeader(t)    // Wait until a stable leader is elected
     ldr.Append("foo")    // Append to leader
     ldr = rafts.getLeader(t)    // Again wait for stable leader
@@ -68,43 +136,4 @@ func TestLeaderReelection(t *testing.T) {
     rafts.checkSingleCommit(t, "foo")
     rafts.shutdownRafts()
 }
-
-func TestServerStateRestore(t *testing.T) {
-    cleanupLogs()
-    rafts := makeRafts() // array of []RaftNode
-
-    ldr := rafts.getLeader(t)
-    ldr.Append("foo")
-    rafts.checkSingleCommit(t, "foo")
-
-    ldr = rafts.getLeader(t)
-
-    ldr.Append("bar")
-    rafts.checkSingleCommit(t, "bar")
-
-    ldr = rafts.getLeader(t)
-    ldr.Append("foo1")
-    rafts.checkSingleCommit(t, "foo1")
-
-    ldr = rafts.getLeader(t)
-    ldr.Append("bar1")
-    rafts.checkSingleCommit(t, "bar1")
-
-    ldr = rafts.getLeader(t)
-    ldr_id := ldr.GetId()
-    ldr_index := ldr_id - 1
-
-    ldr.Shutdown()
-    ldr = rafts.getLeader(t)
-    rafts.restoreRaft(t, ldr_id)
-
-    expect(t, rafts[ldr_index].GetLogAt(1).Data, "foo", "Log mismatch after restarting server")
-    expect(t, rafts[ldr_index].GetLogAt(2).Data, "bar", "Log mismatch after restarting server")
-    expect(t, rafts[ldr_index].GetLogAt(3).Data, "foo1", "Log mismatch after restarting server")
-    expect(t, rafts[ldr_index].GetLogAt(4).Data, "bar1", "Log mismatch after restarting server")
-
-    ldr.Shutdown()
-    rafts.shutdownRafts()
-}
-
 

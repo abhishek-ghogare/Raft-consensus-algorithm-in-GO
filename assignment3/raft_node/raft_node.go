@@ -15,17 +15,17 @@ import (
     "fmt"
 )
 
-func (rn RaftNode) log_error(format string, args ...interface{}) {
+func (rn RaftNode) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
-    logging.Error(format, args...)
+    logging.Error(skip, format, args...)
 }
-func (rn RaftNode) log_info(format string, args ...interface{}) {
+func (rn RaftNode) log_info(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
-    logging.Info(format, args...)
+    logging.Info(skip, format, args...)
 }
-func (rn RaftNode) log_warning(format string, args ...interface{}) {
+func (rn RaftNode) log_warning(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
-    logging.Warning(format, args...)
+    logging.Warning(skip, format, args...)
 }
 
 
@@ -57,14 +57,14 @@ func (rn *RaftNode) Append(data string) {
 }
 
 func (rn *RaftNode) processEvents() {
-    rn.log_info("Process events started")
+    rn.log_info(3, "Process events started")
     if !rn.IsNodeInitialized() {
-        rn.log_error("Raft node not initialized")
+        rn.log_error(3, "Raft node not initialized")
         return
     }
 
     if rn.clusterServer.IsClosed() {
-        rn.log_warning("Cluster server is closed")
+        rn.log_warning(3, "Cluster server is closed")
         return
     }
 
@@ -78,7 +78,7 @@ func (rn *RaftNode) processEvents() {
             actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
         case ev = <-rn.eventCh:
-            rn.log_info("Append request received")
+            rn.log_info(3, "Append request received")
             actions := rn.server_state.ProcessEvent(ev)
             rn.doActions(actions)
         case ev = <-(*rn.clusterServer).Inbox():
@@ -87,9 +87,9 @@ func (rn *RaftNode) processEvents() {
         // Debug logging
             switch ev.Msg.(type) {
             case rsm.AppendRequestEvent:
-                rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
+                //rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
             case rsm.AppendRequestRespEvent:
-                rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
+                //rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
             case rsm.RequestVoteEvent :
             //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
             case rsm.RequestVoteRespEvent :
@@ -106,7 +106,7 @@ func (rn *RaftNode) processEvents() {
                 close(rn.eventCh)
                 close(rn.timeoutCh)
                 //(*rn.clusterServer).Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
-                rn.logs.Close() //TODO:: leveldb not found problem
+                rn.logs.Close() //TODO:: leveldb not found problem when restore testcase is executed first
                 rn.server_state = &rsm.ServerState{}
                 rn.waitShutdown.Done()
                 return
@@ -130,13 +130,13 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             // Debug logging
             switch action.Event.(type) {
             case rsm.AppendRequestEvent:
-                rn.log_info("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
+                rn.log_info(3, "%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
             case rsm.AppendRequestRespEvent:
-                rn.log_info("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
+                rn.log_info(3, "%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
             case rsm.RequestVoteEvent :
-                rn.log_info("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
+                rn.log_info(3, "%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
             case rsm.RequestVoteRespEvent :
-                rn.log_info("%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
+                rn.log_info(3, "%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
             }
 
             if action.ToId == -1 {
@@ -145,24 +145,24 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
                 (*rn.clusterServer).Outbox() <- &cluster.Envelope{Pid:action.ToId, Msg:action.Event}
             }
         case rsm.CommitAction :
-            rn.log_info("commitAction received %+v", action)
+            rn.log_info(3, "commitAction received %+v", action)
             action := action.(rsm.CommitAction)
             rn.CommitChannel <- action
         case rsm.LogStore :
-            rn.log_info("logStore received")
+            rn.log_info(3, "logStore received")
             action := action.(rsm.LogStore)
             lastInd := int(rn.logs.GetLastIndex())
             if lastInd >= action.Index {
                 rn.logs.TruncateToEnd(int64(action.Index)) // Truncate extra entries
             } else if lastInd < action.Index - 1 {
-                rn.log_error("Log inconsistency found")
+                rn.log_error(3, "Log inconsistency found")
             }
             rn.logs.Append(rsm.LogEntry{Index:action.Index, Term:action.Term, Data:action.Data})
         case rsm.AlarmAction :
             action := action.(rsm.AlarmAction)
             rn.timer.Reset(time.Duration(action.Time) * time.Millisecond)
         case rsm.StateStore:
-            rn.log_info("state store received")
+            rn.log_info(3, "state store received")
             rn.server_state.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
         default:
 
@@ -181,23 +181,17 @@ func RegisterEncoding() {
 }
 
 func (rn *RaftNode) Start() {
-    rn.log_info("Starting raft node")
+    rn.log_info(4, "Starting raft node")
     go rn.processEvents()
 }
 // Signal to shut down all goroutines, stop sockets, flush log and close it, cancel timers.
 func (rn *RaftNode) Shutdown() {
     if !rn.IsNodeUp() {
-        rn.log_warning("Already down")
+        rn.log_warning(4, "Already down")
         return
     }
-/*
-    err := rn.server_state.ToServerStateFile("/tmp/raft/node" + strconv.Itoa(rn.GetId()) + "/serverState.json") // TODO:: temp patch
-    if err != nil {
-        rn.log_error("Failed to store server state : %v", err.Error())
-    } else {
-        rn.log_info("Server state stored on file")
-    }*/
-    rn.log_info("Shutting down")
+
+    rn.log_info(4, "Shutting down")
     rn.isUp = false
     rn.isInitialized = false
     rn.timer.Stop()
@@ -210,17 +204,20 @@ func (rn *RaftNode) GetId() int {
     if rn.IsNodeInitialized() {
         return rn.server_state.GetServerId()
     } else {
+        //log_warning(4, "Node not initialized")
         return 0;
     }
 }
 
 func (rn *RaftNode) GetLogAt(index int) rsm.LogEntry { // TODO:: return nil on error
     if ! rn.IsNodeInitialized() {
+        log_warning(4, "Node not initialized")
         return rsm.LogEntry{};
     }
 
     log, err := rn.logs.Get(int64(index))
     if err != nil {
+        log_error(4, "Log access error : %v", err.Error())
         return rsm.LogEntry{};
     }
 
@@ -231,6 +228,7 @@ func (rn *RaftNode) GetCurrentTerm() int {
     if rn.IsNodeInitialized() {
         return rn.server_state.GetCurrentTerm()
     } else {
+        log_warning(4, "Node not initialized")
         return 0
     }
 }
@@ -239,6 +237,7 @@ func (rn *RaftNode) GetServerState() rsm.RaftState {
     if rn.IsNodeInitialized() {
         return rn.server_state.GetServerState()
     } else {
+        log_warning(4, "Node not initialized")
         return 0
     }
 }

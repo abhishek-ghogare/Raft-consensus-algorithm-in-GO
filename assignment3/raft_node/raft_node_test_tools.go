@@ -9,16 +9,17 @@ import (
     rsm "cs733/assignment3/raft_state_machine"
     "cs733/assignment3/logging"
 	"encoding/json"
+    "errors"
 )
 
-func log_error(format string, args ...interface{}) {
-    logging.Error("[TEST] : " + format, args...)
+func log_error(skip int, format string, args ...interface{}) {
+    logging.Error(skip, "[TEST] : " + format, args...)
 }
-func log_info(format string, args ...interface{}) {
-    logging.Info("[TEST] : " + format, args...)
+func log_info(skip int, format string, args ...interface{}) {
+    logging.Info(skip, "[TEST] : " + format, args...)
 }
-func log_warning(format string, args ...interface{}) {
-    logging.Warning("[TEST] : " + format, args...)
+func log_warning(skip int, format string, args ...interface{}) {
+    logging.Warning(skip, "[TEST] : " + format, args...)
 }
 
 type Rafts []*RaftNode
@@ -66,7 +67,7 @@ func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 	node_index := node_id - 1
 
 	config, err := FromConfigFile("/tmp/raft/node" + strconv.Itoa(node_id) + "/config.json")
-	log_info("Node config read : %+v", config)
+	log_info(3, "Node config read : %+v", config)
 	if err != nil {
 		t.Fatalf("Error reopening config : %v", err.Error())
 	}
@@ -82,7 +83,7 @@ func makeConfigs() []*rsm.Config {
     var err error
     mockCluster, err = mock.NewCluster(nil)
     if err != nil {
-        log_error("Error in creating CLUSTER : %v", err.Error())
+        log_error(3, "Error in creating CLUSTER : %v", err.Error())
     }
 
     configBase := rsm.Config{
@@ -100,7 +101,7 @@ func makeConfigs() []*rsm.Config {
         config.LogDir = "/tmp/raft/node" + strconv.Itoa(i) + "/"
         mockCluster.AddServer(i)
         config.MockServer = mockCluster.Servers[i]
-        log_info("Creating Config %v", config.Id)
+        log_info(3, "Creating Config %v", config.Id)
         configs = append(configs, &config)
     }
     return configs
@@ -112,7 +113,7 @@ func makeRafts() Rafts {
         raft := NewRaftNode(config)
         err := ToConfigFile(config.LogDir + "config.json", *config)
         if err != nil {
-            log_error("Error in storing config to file : %v", err.Error())
+            log_error(3, "Error in storing config to file : %v", err.Error())
         }
         raft.Start()
         rafts = append(rafts, raft)
@@ -122,7 +123,7 @@ func makeRafts() Rafts {
 }
 
 func (rafts Rafts) shutdownRafts() {
-    log_info("Shutting down all rafts")
+    log_info(3, "Shutting down all rafts")
     for _, r := range rafts {
         r.Shutdown()
     }
@@ -144,10 +145,11 @@ func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
     // Set 10 sec time span to probe the stable leader
     abortCh := time.NewTimer(4 * time.Second)
     for {
+        time.Sleep(200*time.Millisecond)
         select {
         case <-abortCh.C:
         // listen on abort channel for abort timeout
-            log_warning("Stable leader NOT found : %v", ldr.GetId())
+            log_warning(3, "Stable leader NOT found : %v", ldr.GetId())
             abortCh.Stop()
             return ldr
         default:
@@ -170,7 +172,7 @@ func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
             }
 
             if areAllFollowers {
-                log_info("Stable leader found : %v", ldr.GetId())
+                log_info(3, "Stable leader found : %v", ldr.GetId())
                 abortCh.Stop()
                 return ldr
             }
@@ -217,7 +219,7 @@ func (rafts Rafts) getCurrentLeader(t *testing.T) (*RaftNode) {
     return ldr
 }
 
-func (rafts Rafts) checkSingleCommit(t *testing.T, data string) {
+func (rafts Rafts) checkSingleCommit(t *testing.T, data string) error{
     // Set 5 sec time span to probe the commit channels
     abortCh := time.NewTimer(5 * time.Second)
 
@@ -228,8 +230,7 @@ func (rafts Rafts) checkSingleCommit(t *testing.T, data string) {
         // Check for all nodes
         select {
         case <-abortCh.C:
-            rafts.shutdownRafts()
-            t.Fatalf("Commit msg not received on all nodes after 5 seconds")
+            return  errors.New("Commit msg not received on all nodes after 5 seconds")
         default:
             //prnt("Checking if commit msg received")
             for i, node := range rafts {
@@ -238,14 +239,14 @@ func (rafts Rafts) checkSingleCommit(t *testing.T, data string) {
                         // if node is down then ignore it
                         checked[i] = true
                         checkedNum++
-                        log_warning("Node is down, ignoring commit for this %v", node.GetId())
+                        log_warning(3, "Node is down, ignoring commit for this %v", node.GetId())
                     } else {
                         select {
                         case ci := <-node.CommitChannel:
                             if ci.Err != "" {
-                                log_warning("Unable to commit the log : %v", ci.Err)
+                                log_warning(3, "Unable to commit the log : %v", ci.Err)
                             } else {
-                                log_info("Commit received at commit channel of %v", node.GetId())
+                                log_info(3, "Commit received at commit channel of %v", node.GetId())
                             }
                             checked[i] = true // Ignore from future consideration
                             checkedNum++
@@ -259,5 +260,5 @@ func (rafts Rafts) checkSingleCommit(t *testing.T, data string) {
             }
         }
     }
-
+    return nil
 }
