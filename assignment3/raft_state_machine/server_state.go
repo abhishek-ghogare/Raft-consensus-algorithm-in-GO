@@ -120,6 +120,7 @@ type LogStore struct {
 
 // Store state machine on persistent store
 type StateStore struct {
+    Server_state ServerState
 }
 
 type AlarmAction struct {
@@ -132,32 +133,44 @@ type AlarmAction struct {
  *                                                                  *
  ********************************************************************/
 type ServerState struct {
-    // Persistent state
+                             // Persistent state
     CurrentTerm   int
-    VotedFor      int // -1: not voted
+    VotedFor      int        // -1: not voted
+    CommitIndex   int        // initialised to 0
     numberOfNodes int
 
-    // log is initialised with single dummy log, to make life easier in future checking
-    // Index starts from 1, as first empty entry is present
-    logs            []LogEntry  // Using first 0th dummy entry for all arrays
-    PersistentLog   *log.Log    // Persistent log, used to retrieve logs which are not in memory
+                             // log is initialised with single dummy log, to make life easier in future checking
+                             // Index starts from 1, as first empty entry is present
+    logs          []LogEntry // Using first 0th dummy entry for all arrays
+    PersistentLog *log.Log   // Persistent log, used to retrieve logs which are not in memory
 
-    // Non-persistent state
-    server_id   int
-    commitIndex int       // initialised to -1
-    lastApplied int
-    nextIndex   []int     // Using first 0th dummy entry for all arrays
-    matchIndex  []int     // Using first 0th dummy entry for all arrays
-    myState     RaftState // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
+                             // Non-persistent state
+    server_id     int
+                             // lastApplied int      // not used here, duplicate committing is detected and handled in upper layer of raft
+    nextIndex   []int        // Using first 0th dummy entry for all arrays
+    matchIndex  []int        // Using first 0th dummy entry for all arrays
+    myState     RaftState    // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
 
-    // maintain received votes from other nodes,
-    // if vote received, set corresponding value to term for which the vote has received
-    // -ve value represents negative vote
-    receivedVote []int // Using first 0th dummy entry for all arrays
+                             // maintain received votes from other nodes,
+                             // if vote received, set corresponding value to term for which the vote has received
+                             // -ve value represents negative vote
+    receivedVote []int       // Using first 0th dummy entry for all arrays
 
-    // Timeouts in milliseconds
+                             // Timeouts in milliseconds
     ElectionTimeout  int
     HeartbeatTimeout int
+
+     /**
+      *      Few assumptions and implementation according :
+      *      1.  All the logs in memory and also on persistent store are has strictly increasing order of indices with
+      *          the difference of 1.
+      *      2.  There will always be at least one log in in-memory log at any time, which will be used to compare
+      *          prevLogIndex and prevLogTerm while appending new entries.
+      *      3.  Logs are not loaded into memory from persistent store when node becomes alive, but loads only last log,
+      *          so that it can be used for future checking while append request comes.
+      *      4.  Logs from commitIndex onwards are loaded into in-memory log from persistent store only when commitIndex
+      *          is updated
+      */
 }
 
 func fromServerStateFile(serverStateFile string) (serState *ServerState, err error) {
@@ -165,14 +178,14 @@ func fromServerStateFile(serverStateFile string) (serState *ServerState, err err
     var f *os.File
 
     if f, err = os.Open(serverStateFile); err != nil {
-        state.log_error(3, "Unable to open state file : %v", err.Error())
+        state.log_error(4, "Unable to open state file : %v", err.Error())
         return nil, err
     }
     defer f.Close()
 
     dec := json.NewDecoder(f)
     if err = dec.Decode(&state); err != nil {
-        state.log_error(3, "Unable to decode state file : %v", err.Error())
+        state.log_error(4, "Unable to decode state file : %v", err.Error())
         return nil, err
     }
     return &state, nil
@@ -181,11 +194,13 @@ func fromServerStateFile(serverStateFile string) (serState *ServerState, err err
 func (serState *ServerState) ToServerStateFile(serverStateFile string) (err error) {
     var f *os.File
     if f, err = os.Create(serverStateFile); err != nil {
+        serState.log_error(4, "Unable to create state file : %v", err.Error())
         return err
     }
     defer f.Close()
     enc := json.NewEncoder(f)
-    if err = enc.Encode(serState); err != nil {
+    if err = enc.Encode(*serState); err != nil {
+        serState.log_error(4, "Unable to encode state file : %v", err.Error())
         return err
     }
     return nil
@@ -198,7 +213,7 @@ func New(config *Config) (server *ServerState) {
         VotedFor        : -1,
         numberOfNodes   : config.NumOfNodes,
         logs            : []LogEntry{{Term: 0, Index: 0, Data: "Dummy Log"}}, // Initialising log with single empty log, to make life easier in future checking
-        commitIndex     : 0,
+        CommitIndex     : 0,
         nextIndex       : make([]int, config.NumOfNodes+1),
         matchIndex      : make([]int, config.NumOfNodes+1),
         receivedVote    : make([]int, config.NumOfNodes+1),
@@ -235,7 +250,6 @@ func Restore(config *Config) (server *ServerState) {
         new_state.log_error(3, "Unable to open log file : %v\n", err)
         return nil
     }
-    defer lg.Close()
 /*
     new_state.log_info("Log opened, last log index : %+v", lg)
     for i := int64(0); i <= lg.GetLastIndex(); i++ {
@@ -252,13 +266,28 @@ func Restore(config *Config) (server *ServerState) {
     lastLogEntry, err := lg.Get(lg.GetLastIndex())
     if err != nil {
         new_state.log_error(3, "Error in reading log : %v", err.Error())
+        lg.Close()
         return nil
     }
     new_state.logs = append(new_state.logs, lastLogEntry.(LogEntry))
     new_state.log_info(3, "Last log from persistent store restored")
 
+    lg.Close()
+
+    new_state.setCommitIndex(restored_state.CommitIndex)
     return new_state
 }
+
+func (server *ServerState) getStateStoreAction() StateStore {
+    server_copy := ServerState{
+        CommitIndex:server.CommitIndex,
+        ElectionTimeout:server.ElectionTimeout,
+        HeartbeatTimeout:server.HeartbeatTimeout,
+        CurrentTerm:server.CurrentTerm,
+        VotedFor:server.VotedFor }
+    return StateStore{Server_state:server_copy}
+}
+
 
 //  Returns last log entry
 func (server *ServerState) getLastLog() *LogEntry {
@@ -353,11 +382,11 @@ func (server *ServerState) setCommitIndex(commitIndex int) {
     // if logs after commit index are not loaded,
     if commitIndex>0 && commitIndex < server.logs[0].Index {
         // Prepend all logs from commitIndex to server.logs[0].Index
-        server.log_info(3, "Restorig logs from persistent store from index : %v", commitIndex)
+        server.log_info(4, "Restorig logs from persistent store from index : %v", commitIndex)
         server.logs = *server.getLogsFrom(commitIndex)
     }
-    server.log_info(3, "Updating commit index to : %v", commitIndex)
-    server.commitIndex = commitIndex
+    server.log_info(4, "Updating commit index to : %v", commitIndex)
+    server.CommitIndex = commitIndex
 }
 
 //  Returns current server state
@@ -373,8 +402,8 @@ func (server *ServerState) GetServerId() int {
 }
 
 // Broadcast an event, returns array of actions
-func (server *ServerState) broadcast(event interface{}) []interface{} {
-    actions := make([]interface{}, 0)
+func (server *ServerState) broadcast(event interface{}) (actions []interface{}) {
+    actions = make([]interface{}, 0)
     action := SendAction{ToId: -1, Event: event} // Sending to -1, -1 is for broadcast
     actions = append(actions, action)
     return actions
@@ -399,9 +428,9 @@ func (server *ServerState) initialiseLeader() {
  *                          Vote Request                            *
  *                                                                  *
  ********************************************************************/
-func (server *ServerState) voteRequest(event RequestVoteEvent) []interface{} {
+func (server *ServerState) voteRequest(event RequestVoteEvent) (actions []interface{}) {
 
-    actions := make([]interface{}, 0)
+    actions = make([]interface{}, 0)
 
     // Track if persistent state of raft state machine changes
     state_changed_flag := false
@@ -409,7 +438,7 @@ func (server *ServerState) voteRequest(event RequestVoteEvent) []interface{} {
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append([]interface{}{StateStore{}}, actions...)
+            actions = append(actions, server.getStateStoreAction())
         }
     }()
 
@@ -466,9 +495,9 @@ func (server *ServerState) voteRequest(event RequestVoteEvent) []interface{} {
  *                      Vote Request Response                       *
  *                                                                  *
  ********************************************************************/
-func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) []interface{} {
+func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) (actions []interface{}) {
 
-    actions := make([]interface{}, 0)
+    actions = make([]interface{}, 0)
 
     // Track if persistent state of raft state machine changes
     state_changed_flag := false
@@ -476,7 +505,7 @@ func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) []int
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append([]interface{}{StateStore{}}, actions...)
+            actions = append(actions, server.getStateStoreAction())
         }
     }()
 
@@ -541,7 +570,7 @@ func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) []int
                     PrevLogIndex: server.getLastLog().Index,
                     PrevLogTerm:  server.getLastLog().Term,
                     Entries:      []LogEntry{},
-                    LeaderCommit: server.commitIndex}
+                    LeaderCommit: server.CommitIndex}
 
                 alarm := AlarmAction{Time: server.HeartbeatTimeout}
                 actions = append(actions, alarm)
@@ -559,8 +588,8 @@ func (server *ServerState) voteRequestResponse(event RequestVoteRespEvent) []int
  *                          Append Request                          *
  *                                                                  *
  ********************************************************************/
-func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{} {
-    actions := make([]interface{}, 0)
+func (server *ServerState) appendRequest(event AppendRequestEvent) (actions []interface{}) {
+    actions = make([]interface{}, 0)
 
     // Track if persistent state of raft state machine changes
     state_changed_flag := false
@@ -568,7 +597,8 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append([]interface{}{StateStore{}}, actions...)
+            server.log_info(3, "Appending state store action")
+            actions = append(actions, server.getStateStoreAction())
         }
     }()
 
@@ -624,7 +654,7 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
                return actions
            }*/
 
-        // Check if previous entries are missing TODO:: prevent direct access of logs
+        // Check if previous entries are missing
         if server.getLastLog().Index < event.PrevLogIndex ||
            server.getLogOf(event.PrevLogIndex).Term /*logs[event.PrevLogIndex].Term*/ != event.PrevLogTerm {
             // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
@@ -638,8 +668,8 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
         if server.getLastLog().Index > event.PrevLogIndex {
             // There are entries from last leaders
             // truncate them up to the end
-            //truncatedLogs := server.getLogsFrom(event.PrevLogIndex+1)// logs[event.PrevLogIndex+1:] // TODO:: prevent direct access of log
-            truncatedLogs := server.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1] // TODO:: prevent direct access of log
+            //truncatedLogs := server.getLogsFrom(event.PrevLogIndex+1)// logs[event.PrevLogIndex+1:]
+            truncatedLogs := server.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1]
             server.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
             for _, log := range *truncatedLogs {
                 action := CommitAction{Index: log.Index, Data: log, Err: "Log truncated"}
@@ -648,26 +678,27 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
         }
 
         // Update log if entries are not present
-        server.logs = append(server.logs, event.Entries...) // TODO:: prevent direct access of log
+        server.logs = append(server.logs, event.Entries...)
 
         for _, log := range event.Entries {
             action := LogStore{Index: log.Index, Term: log.Term, Data: log.Data}
             actions = append(actions, action)
         }
 
-        if event.LeaderCommit > server.commitIndex {
+        if event.LeaderCommit > server.CommitIndex {
             var commitFrom, commitUpto int
             // If leader has commited entries, so should this server
             if event.LeaderCommit <= server.getLastLog().Index {
-                commitFrom = server.commitIndex + 1
+                commitFrom = server.CommitIndex + 1
                 commitUpto = event.LeaderCommit
             } else {
-                commitFrom = server.commitIndex + 1
+                commitFrom = server.CommitIndex + 1
                 commitUpto = server.getLastLog().Index
             }
 
             // Loads logs from persistent store from commitIndex to end if not in in-memory logs
             server.setCommitIndex(commitUpto)
+            state_changed_flag = true
 
             // Commit all logs from commitFrom to commitUpto
             for i := commitFrom; i <= commitUpto; i++ {
@@ -698,9 +729,9 @@ func (server *ServerState) appendRequest(event AppendRequestEvent) []interface{}
  *                    Append Request Response                       *
  *                                                                  *
  ********************************************************************/
-func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) []interface{} {
+func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) (actions []interface{}) {
 
-    actions := make([]interface{}, 0)
+    actions = make([]interface{}, 0)
 
     // Track if persistent state of raft state machine changes
     state_changed_flag := false
@@ -708,7 +739,7 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append([]interface{}{StateStore{}}, actions...)
+            actions = append(actions, server.getStateStoreAction())
         }
     }()
 
@@ -735,7 +766,7 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
             }
 
             // Resend all logs from the holes to the end
-            prevLog := server.logs[server.nextIndex[event.FromId]-1] // TODO:: prevent direct access of log
+            prevLog := server.logs[server.nextIndex[event.FromId]-1]
             startIndex := server.nextIndex[event.FromId]
             logs := append([]LogEntry{}, server.logs[startIndex:]...) // copy server.log from startIndex to the end to "logs"
             event1 := AppendRequestEvent{
@@ -744,7 +775,7 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
                 PrevLogIndex: prevLog.Index,
                 PrevLogTerm:  prevLog.Term,
                 Entries:      logs,
-                LeaderCommit: server.commitIndex}
+                LeaderCommit: server.CommitIndex}
             action := SendAction{ToId: event.FromId, Event: event1}
             actions = append(actions, action)
             return actions
@@ -760,9 +791,9 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
             // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
             // set commitIndex = N
             for i := server.numberOfNodes / 2; i >= 0; i-- {
-                if sorted[i] > server.commitIndex && server.logs[sorted[i]].Term == server.CurrentTerm {
+                if sorted[i] > server.CommitIndex && server.logs[sorted[i]].Term == server.CurrentTerm {
                     // Commit all not committed eligible entries
-                    for k := server.commitIndex + 1; k <= sorted[i]; k++ {
+                    for k := server.CommitIndex + 1; k <= sorted[i]; k++ {
                         action := CommitAction{
                             Index: k,
                             Data:  server.logs[k],
@@ -772,6 +803,7 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
 
                     //server.commitIndex = sorted[i]
                     server.setCommitIndex(sorted[i])
+                    state_changed_flag = true
                     break
                 }
             }
@@ -792,9 +824,9 @@ func (server *ServerState) appendRequestResponse(event AppendRequestRespEvent) [
  *                          Timeout                                 *
  *                                                                  *
  ********************************************************************/
-func (server *ServerState) timeout(event TimeoutEvent) []interface{} {
+func (server *ServerState) timeout(event TimeoutEvent) (actions []interface{}) {
 
-    actions := make([]interface{}, 0)
+    actions = make([]interface{}, 0)
 
     // Track if persistent state of raft state machine changes
     state_changed_flag := false
@@ -802,7 +834,7 @@ func (server *ServerState) timeout(event TimeoutEvent) []interface{} {
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append([]interface{}{StateStore{}}, actions...)
+            actions = append(actions, server.getStateStoreAction())
         }
     }()
 
@@ -816,7 +848,7 @@ func (server *ServerState) timeout(event TimeoutEvent) []interface{} {
             PrevLogIndex: server.getLastLog().Index,
             PrevLogTerm:  server.getLastLog().Term,
             Entries:      []LogEntry{},
-            LeaderCommit: server.commitIndex}
+            LeaderCommit: server.CommitIndex}
         heartbeatActions := server.broadcast(heartbeatEvent) // broadcast request vote event
         actions = append(actions, heartbeatActions...)
         actions = append(actions, AlarmAction{Time: server.HeartbeatTimeout})
@@ -848,9 +880,9 @@ func (server *ServerState) timeout(event TimeoutEvent) []interface{} {
  *                     Append from client                           *
  *                                                                  *
  ********************************************************************/
-func (server *ServerState) appendClientRequest(event AppendEvent) []interface{} {
+func (server *ServerState) appendClientRequest(event AppendEvent) (actions []interface{}) {
 
-    actions := make([]interface{}, 0)
+    actions = make([]interface{}, 0)
 
     switch server.myState {
     case LEADER:
@@ -863,7 +895,7 @@ func (server *ServerState) appendClientRequest(event AppendEvent) []interface{} 
             PrevLogIndex: server.getLastLog().Index,
             PrevLogTerm:  server.getLastLog().Term,
             Entries:      logs,
-            LeaderCommit: server.commitIndex}
+            LeaderCommit: server.CommitIndex}
 
         server.logs = append(server.logs, log)                          // Append to self log
         server.matchIndex[server.server_id] = server.getLastLog().Index // Update self matchIndex

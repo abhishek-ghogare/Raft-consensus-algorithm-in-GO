@@ -71,6 +71,12 @@ func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 	if err != nil {
 		t.Fatalf("Error reopening config : %v", err.Error())
 	}
+
+    _, err = mockCluster.AddServer(config.Id)
+    if err != nil {
+        rafts.shutdownRafts()
+        t.Fatalf("Unable to re-add server with id : %v : error:%v", config.Id, err.Error())
+    }
 	config.MockServer = mockCluster.Servers[config.Id]
 	//config.mockServer.Heal()
 	rafts[node_index] = RestoreServerState(config)

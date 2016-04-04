@@ -105,7 +105,7 @@ func (rn *RaftNode) processEvents() {
                 close(rn.CommitChannel)
                 close(rn.eventCh)
                 close(rn.timeoutCh)
-                //(*rn.clusterServer).Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
+                (*rn.clusterServer).Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
                 rn.logs.Close() //TODO:: leveldb not found problem when restore testcase is executed first
                 rn.server_state = &rsm.ServerState{}
                 rn.waitShutdown.Done()
@@ -162,10 +162,11 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             action := action.(rsm.AlarmAction)
             rn.timer.Reset(time.Duration(action.Time) * time.Millisecond)
         case rsm.StateStore:
+            stateStore := action.(rsm.StateStore)
             rn.log_info(3, "state store received")
-            rn.server_state.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
+            stateStore.Server_state.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
         default:
-
+            rn.log_error(3, "Unknown action received : %v", action)
         }
     }
 }

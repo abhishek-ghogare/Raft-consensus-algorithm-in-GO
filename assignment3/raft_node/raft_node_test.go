@@ -84,10 +84,10 @@ func TestServerStateRestore(t *testing.T) {
     time.Sleep(3*time.Second)
 
 
-    expect(t, rafts[ldr_index].GetLogAt(997).Data, "17", "Log mismatch after restarting server")
-    expect(t, rafts[ldr_index].GetLogAt(998).Data, "18", "Log mismatch after restarting server")
-    expect(t, rafts[ldr_index].GetLogAt(999).Data, "19", "Log mismatch after restarting server")
-    expect(t, rafts[ldr_index].GetLogAt(1000).Data, "20", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(17).Data, "17", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(18).Data, "18", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(19).Data, "19", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(20).Data, "20", "Log mismatch after restarting server")
 
     ldr.Shutdown()
     rafts.shutdownRafts()
