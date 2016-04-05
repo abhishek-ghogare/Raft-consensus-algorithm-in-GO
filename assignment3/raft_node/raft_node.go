@@ -35,7 +35,7 @@ type RaftNode struct {
     timeoutCh       chan interface{}
                            //config          Config
     LogDir          string // Log file directory for this node
-    server_state    *rsm.ServerState
+    server_state    *rsm.StateMachine
     clusterServer   *mock.MockServer
     logs            *log.Log
     timer           *time.Timer
@@ -107,7 +107,7 @@ func (rn *RaftNode) processEvents() {
                 close(rn.timeoutCh)
                 (*rn.clusterServer).Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
                 rn.logs.Close() //TODO:: leveldb not found problem when restore testcase is executed first
-                rn.server_state = &rsm.ServerState{}
+                rn.server_state = &rsm.StateMachine{}
                 rn.waitShutdown.Done()
                 return
             }
@@ -164,7 +164,7 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
         case rsm.StateStore:
             stateStore := action.(rsm.StateStore)
             rn.log_info(3, "state store received")
-            stateStore.Server_state.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
+            stateStore.State.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
         default:
             rn.log_error(3, "Unknown action received : %v", action)
         }
