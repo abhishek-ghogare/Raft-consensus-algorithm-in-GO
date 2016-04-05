@@ -2,7 +2,7 @@ package raft_node
 
 import (
     "github.com/cs733-iitb/log"
-    rsm "cs733/assignment3/raft_state_machine"
+    rsm "cs733/assignment3/raft_node/raft_state_machine"
 )
 
 
