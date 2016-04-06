@@ -96,8 +96,8 @@ func makeConfigs() []*rsm.Config {
         //NodeNetAddrList 	:nodeNetAddrList,
         Id                  :1,
         LogDir              :"log file", // Log file directory for this node
-        ElectionTimeout     :700,
-        HeartbeatTimeout    :200,
+        ElectionTimeout     :500,
+        HeartbeatTimeout    :100,
         NumOfNodes          :5}
 
     var configs []*rsm.Config
@@ -145,13 +145,12 @@ func cleanupLogs() {
  * If no stable leader is elected after timeout, return the current leader
  */
 func (rafts Rafts) getLeader(t *testing.T) (*RaftNode) {
-    time.Sleep(1 * time.Second)
     var ldr *RaftNode
 
     // Set 10 sec time span to probe the stable leader
     abortCh := time.NewTimer(4 * time.Second)
     for {
-        time.Sleep(200*time.Millisecond)
+        //time.Sleep(200*time.Millisecond)
         select {
         case <-abortCh.C:
         // listen on abort channel for abort timeout

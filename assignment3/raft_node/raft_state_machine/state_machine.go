@@ -217,6 +217,7 @@ func (state *StateMachine)getLogsFrom(index int) *[]LogEntry {
     if index < state.logs[0].Index {
         // Get all logs WHICH are NOT in memory but in persistent store
         for ; index< state.logs[0].Index ; index++ {
+            state.log_info(4, "Fetching %v th log from persistent store", index)
             l, e := state.PersistentLog.Get(int64(index))
             if e!=nil {
                 state.log_error(4, "Persistent log access error : %v", e.Error())

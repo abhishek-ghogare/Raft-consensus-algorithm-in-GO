@@ -104,19 +104,19 @@ func Restore(config *Config) (state *StateMachine) {
         new_state.log_error(3, "Unable to open log file : %v\n", err)
         return nil
     }
+    defer lg.Close()
+    new_state.PersistentLog = lg // temp storing lg
 
     lastLogEntry, err := lg.Get(lg.GetLastIndex())
     if err != nil {
         new_state.log_error(3, "Error in reading log : %v", err.Error())
-        lg.Close()
         return nil
     }
+
     new_state.logs = append(new_state.logs, lastLogEntry.(LogEntry))
     new_state.log_info(3, "Last log from persistent store restored")
 
-    lg.Close()
-
-
-    new_state.setCommitIndex(restored_state.CommitIndex)
+    new_state.setCommitIndex( restored_state.CommitIndex )
+    new_state.PersistentLog = nil
     return new_state
 }

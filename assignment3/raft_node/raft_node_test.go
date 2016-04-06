@@ -30,6 +30,67 @@ func Test(t *testing.T) {
 }
 
 
+func TestServerStateRestore2(t *testing.T) {
+    rand.Seed(10)
+    cleanupLogs()
+    rafts := makeRafts() // array of []RaftNode
+
+
+    ldr := rafts.getLeader(t)
+
+
+    for i:=1 ; i<=10 ;{
+        ldr = rafts.getLeader(t)
+        ldr.Append(strconv.Itoa(i))
+        //err := rafts.checkSingleCommit(t, strconv.Itoa(i))
+        /*if err != nil {
+            log_warning(3, "Committing msg : %v failed", strconv.Itoa(i))
+            retries++
+            if retries>10 {
+                rafts.shutdownRafts()
+                t.Fatalf("Failed to commit a msg, %v, after 10 retries", strconv.Itoa(i))
+            }
+            continue
+        }*/
+        i++
+    }
+
+    ldr = rafts.getLeader(t)
+    ldr_id := ldr.GetId()
+    ldr_index := ldr_id - 1
+
+    ldr.Shutdown()
+
+    for i:=11; i<=20 ;  {
+        ldr = rafts.getLeader(t)
+        ldr.Append(strconv.Itoa(i))
+        /*err := rafts.checkSingleCommit(t, strconv.Itoa(i))
+        if err != nil {
+            log_warning(3, "Committing msg : %v failed", strconv.Itoa(i))
+            retries++
+            if retries>10 {
+                rafts.shutdownRafts()
+                t.Fatalf("Failed to commit a msg, %v, after 10 retries", strconv.Itoa(i))
+            }
+            continue
+        }*/
+        i++
+    }
+
+    rafts.restoreRaft(t, ldr_id)
+    time.Sleep(3*time.Second)
+
+
+    expect(t, rafts[ldr_index].GetLogAt(17).Data, "17", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(18).Data, "18", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(19).Data, "19", "Log mismatch after restarting server")
+    expect(t, rafts[ldr_index].GetLogAt(20).Data, "20", "Log mismatch after restarting server")
+
+    ldr.Shutdown()
+    rafts.shutdownRafts()
+}
+
+
 func TestServerStateRestore(t *testing.T) {
     rand.Seed(10)
     cleanupLogs()
@@ -92,7 +153,6 @@ func TestServerStateRestore(t *testing.T) {
     ldr.Shutdown()
     rafts.shutdownRafts()
 }
-
 
 
 func TestNetworkPartition(t *testing.T) {
