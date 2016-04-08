@@ -206,6 +206,7 @@ func (state *StateMachine)GetLogOf(index int64) *LogEntry {
     l, e := state.PersistentLog.Get(index)
     if e!=nil {
         state.log_error(4, "Persistent log access error : %v", e.Error())
+        panic("PANNICING") // TODO:: for leveldb: not found error
         return nil
     }
 
