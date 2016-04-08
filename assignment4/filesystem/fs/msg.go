@@ -39,17 +39,19 @@ var MAX_CONTENT_SIZE = 1 << 32
 //     ERR_FILE_NOT_FOUND\r\n
 //     ERR_CMD_ERR\r\n
 //     ERR_INTERNAL\r\n
+//     ERR_REDIRECT <new leader URL>\r\n
 
 type Msg struct {
 	// Kind = the first character of the command. For errors, it
 	// is the first letter after "ERR_", ('V' for ERR_VERSION, for
 	// example), except for "ERR_CMD_ERR", for which the kind is 'M'
-	Kind     byte
-	Filename string
-	Contents []byte
-	Numbytes int
-	Exptime  int // expiry time in seconds
-	Version  int
+	Kind            byte
+	Filename        string
+	Contents        []byte
+	Numbytes        int
+	Exptime         int     // expiry time in seconds
+	Version         int
+    RedirectAddr    string  // if the client is not a leader, redirect to leader url
 }
 
 func GetMsg(reader *bufio.Reader) (msg *Msg, msgerr error, fatalerr error) {
@@ -107,6 +109,7 @@ func parseFirst(reader *bufio.Reader, buf []byte) (msg *Msg, msgerr error, fatal
 	exptime := 0
 	response := false
 	kind := byte(0)
+    redirect := ""
 
 	fields = strings.Fields(msgstr)
 	switch fields[0] {
@@ -155,6 +158,11 @@ func parseFirst(reader *bufio.Reader, buf []byte) (msg *Msg, msgerr error, fatal
 	case "ERR_INTERNAL":
 		kind = 'I'
 		response = true
+    case "ERR_REDIRECT":    // ERR_REDIRECT <new leader URL>
+        checkN(fields, 2)
+        kind = 'R'
+        redirect = fields[1]
+        response = true
 	default:
 		fatalerr = fmt.Errorf("Command %s not recognized", fields[0])
 	}
@@ -166,7 +174,7 @@ func parseFirst(reader *bufio.Reader, buf []byte) (msg *Msg, msgerr error, fatal
 		if !response {
 			filename = fields[1]
 		}
-		return &Msg{Kind: kind, Filename: filename, Numbytes: numbytes, Exptime: exptime, Version: version}, msgerr, nil
+		return &Msg{Kind: kind, Filename: filename, Numbytes: numbytes, Exptime: exptime, Version: version, RedirectAddr:redirect}, msgerr, nil
 	} else {
 		return nil, nil, fatalerr
 	}
