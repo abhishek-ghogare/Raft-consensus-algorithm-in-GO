@@ -36,7 +36,7 @@ const RandomTimeout = 200
 
 type LogEntry struct {
     Term  int
-    Index int
+    Index int64
     Data  interface{}
 }
 
@@ -48,23 +48,23 @@ type LogEntry struct {
 type AppendRequestEvent struct {
     FromId       int
     Term         int
-    PrevLogIndex int
+    PrevLogIndex int64
     PrevLogTerm  int
     Entries      []LogEntry
-    LeaderCommit int
+    LeaderCommit int64
 }
 
 type AppendRequestRespEvent struct {
     FromId       int
     Term         int
     Success      bool
-    LastLogIndex int // Helps in updating nextIndex & matchIndex
+    LastLogIndex int64 // Helps in updating nextIndex & matchIndex
 }
 
 type RequestVoteEvent struct {
     FromId       int
     Term         int
-    LastLogIndex int
+    LastLogIndex int64
     LastLogTerm  int
 }
 
@@ -81,7 +81,7 @@ type AppendEvent struct {
     Data interface{}
 }
 type UpdateLastAppliedEvent struct {
-    Index int
+    Index int64
 }
 /********************************************************************
  *                                                                  *
@@ -117,7 +117,10 @@ func (err Error_NotLeader) Error() string{
     }
 }
 
-type LogStore LogEntry
+/*
+ *  Removing log store action, since we are storing directly into persistent store
+ */
+// type LogStore LogEntry
 /*
 type LogStore struct {
     Index int
@@ -142,19 +145,19 @@ type StateMachine struct {
                              // Persistent state
     CurrentTerm   int
     VotedFor      int        // -1: not voted
-    LastApplied   int        // Updated by client handler when the log is applied to its state machine // TODO:: update changes for this
+    LastApplied   int64      // Updated by client handler when the log is applied to its state machine // TODO:: update changes for this
     numberOfNodes int
 
                              // log is initialised with single dummy log, to make life easier in future checking
                              // Index starts from 1, as first empty entry is present
-    logs          []LogEntry // Using first 0th dummy entry for all arrays
+    //logs          []LogEntry // Using first 0th dummy entry for all arrays
     PersistentLog *log.Log   // Persistent log, used to retrieve logs which are not in memory
 
                              // Non-persistent state
     server_id     int
-    commitIndex   int        // initialised to 0    // TODO:: remove state store for commitIndex update
-    nextIndex   []int        // Using first 0th dummy entry for all arrays
-    matchIndex  []int        // Using first 0th dummy entry for all arrays
+    commitIndex   int64      // initialised to 0    // TODO:: remove state store for commitIndex update
+    nextIndex   []int64      // Using first 0th dummy entry for all arrays
+    matchIndex  []int64      // Using first 0th dummy entry for all arrays
     myState     RaftState    // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
 
                              // maintain received votes from other nodes,
@@ -196,103 +199,48 @@ func (state *StateMachine) GetStateStoreAction() StateStore {
  */
 //  Returns last log entry
 func (state *StateMachine) getLastLog() *LogEntry {
-    // logs would never empty, at least one log is always ensured
-    return &state.logs[len(state.logs)-1]
+    log := state.getLogOf(state.PersistentLog.GetLastIndex())
+    return log
 }
 //  Return log of given index
-func (state *StateMachine)getLogOf(index int) *LogEntry {
-    // If index is out of range
-    if index > state.getLastLog().Index || index < 0 {
-        state.log_error(4, "Index is out of range")
+func (state *StateMachine)getLogOf(index int64) *LogEntry {
+    l, e := state.PersistentLog.Get(index)
+    if e!=nil {
+        state.log_error(4, "Persistent log access error : %v", e.Error())
         return nil
     }
 
-    // If log is not in memory, get it from persistent log
-    if index < state.logs[0].Index {
+    j := l.(LogEntry)
+    return &j
+}
+//  Return all logs from given index(including index) to the end
+func (state *StateMachine)getLogsFrom(index int64) *[]LogEntry {
+    logs := []LogEntry{}
+
+    for ; index <= state.PersistentLog.GetLastIndex() ; index++ {
+        state.log_info(4, "Fetching %v th log from persistent store", index)
         l, e := state.PersistentLog.Get(int64(index))
         if e!=nil {
             state.log_error(4, "Persistent log access error : %v", e.Error())
             return nil
         } else {
-            j := l.(LogEntry)
-            return &j
+            logs = append(logs,l.(LogEntry))
         }
     }
 
-    // Assuming all log indices are increasing by 1, which is ensured
-    return &state.logs[index - state.logs[0].Index]
-}
-//  Return all logs from given index(including index) to the end
-func (state *StateMachine)getLogsFrom(index int) *[]LogEntry {
-    // If index is out of range
-    if index > state.getLastLog().Index || index < 0 {
-        state.log_error(4, "Index is out of range")
-        return nil
-    }
-
-    logs := []LogEntry{}
-
-    // If logs are not in memory, get it from persistent log
-    if index < state.logs[0].Index {
-        // Get all logs WHICH are NOT in memory but in persistent store
-        for ; index< state.logs[0].Index ; index++ {
-            state.log_info(4, "Fetching %v th log from persistent store", index)
-            l, e := state.PersistentLog.Get(int64(index))
-            if e!=nil {
-                state.log_error(4, "Persistent log access error : %v", e.Error())
-                return nil
-            } else {
-                logs = append(logs,l.(LogEntry))
-            }
-        }
-    }
-
-    logs = append(logs, state.logs[index - state.logs[0].Index:]...)
-    // Assuming all log indices are incremental
     return &logs
 }
 //  Return all logs from given index(including index) to the end
-//  and truncate them from in-memory logs and also from persistent logs
-func (state *StateMachine)truncateLogsFrom(index int) *[]LogEntry {
+//  and truncate them from persistent logs
+func (state *StateMachine)truncateLogsFrom(index int64) *[]LogEntry {
     logs := state.getLogsFrom(index)
 
-    // If part of to be truncated logs is in persistent store
-    if index < state.logs[0].Index {
-        err := state.PersistentLog.TruncateToEnd(int64(index))
-        if err != nil {
-            state.log_error(4, "Error while truncating persistent logs : %v", err.Error())
-        }
-        // Clear in memory log
-        state.logs = []LogEntry{}
-    } else {
-        state.logs = state.logs[:index - state.logs[0].Index] // s = s[include_start:exclude_end]
-    }
-
-    // Check if logs is empty
-    if len(state.logs) == 0 {
-        // We need to restore at least one log from persistent store, logs should never be empty
-        // Append index-1 th log
-        l, e := state.PersistentLog.Get(int64(index-1))
-        if e != nil {
-            state.log_error(4, "Error while getting log : %v", e.Error())
-            return nil
-        }
-        state.logs = append(state.logs, l.(LogEntry))
+    err := state.PersistentLog.TruncateToEnd(index)
+    if err != nil {
+        state.log_error(4, "Error while truncating persistent logs : %v", err.Error())
     }
 
     return logs
-}
-
-//  Set commitIndex, load commitIndex onwards logs into memory from persistent store if not available
-func (state *StateMachine) setCommitIndex(commitIndex int) {
-    // if logs after commit index are not loaded,
-    if commitIndex>0 && commitIndex < state.logs[0].Index {
-        // Prepend all logs from commitIndex to server.logs[0].Index
-        state.log_info(4, "Restorig logs from persistent store from index : %v", commitIndex)
-        state.logs = *state.getLogsFrom(commitIndex)
-    }
-    state.log_info(4, "Updating commit index to : %v", commitIndex)
-    state.commitIndex = commitIndex
 }
 
 //  Returns current server state
@@ -319,8 +267,8 @@ func (state *StateMachine) broadcast(event interface{}) (actions []interface{}) 
 func (state *StateMachine) initialiseLeader() {
     // become leader
     state.myState = LEADER
-    state.matchIndex = make([]int, state.numberOfNodes+1)
-    state.nextIndex = make([]int, state.numberOfNodes+1)
+    state.matchIndex = make([]int64, state.numberOfNodes+1)
+    state.nextIndex = make([]int64, state.numberOfNodes+1)
     state.matchIndex[state.server_id] = state.getLastLog().Index
 
     // initialise nextIndex
@@ -584,15 +532,12 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
         }
 
         // Update log if entries are not present
-        state.logs = append(state.logs, event.Entries...)
-
         for _, log := range event.Entries {
-            action := LogStore{Index: log.Index, Term: log.Term, Data: log.Data}
-            actions = append(actions, action)
+            state.PersistentLog.Append(log)
         }
 
         if event.LeaderCommit > state.commitIndex {
-            var commitFrom, commitUpto int
+            var commitFrom, commitUpto int64
             // If leader has commited entries, so should this server
             if event.LeaderCommit <= state.getLastLog().Index {
                 commitFrom = state.commitIndex + 1
@@ -603,7 +548,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
             }
 
             // Loads logs from persistent store from commitIndex to end if not in in-memory logs
-            state.setCommitIndex(commitUpto)
+            state.commitIndex = commitUpto
 
             // Commit all logs from commitFrom to commitUpto
             for i := commitFrom; i <= commitUpto; i++ {
@@ -629,6 +574,20 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
     return actions
 }
 
+
+
+type int64Slice []int64
+func (array int64Slice) Len() int {
+    return len(array)
+}
+func (array int64Slice) Less(i int, j int) bool {
+    return array[i] < array[j]
+}
+func (array int64Slice) Swap(i int, j int) {
+    tmp := array[i]
+    array[j] = array[i]
+    array[i] = tmp
+}
 /********************************************************************
  *                                                                  *
  *                    Append Request Response                       *
@@ -671,15 +630,15 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             }
 
             // Resend all logs from the holes to the end
-            prevLog := state.logs[state.nextIndex[event.FromId]-1]
+            prevLog := state.getLogOf(state.nextIndex[event.FromId]-1)
             startIndex := state.nextIndex[event.FromId]
-            logs := append([]LogEntry{}, state.logs[startIndex:]...) // copy server.log from startIndex to the end to "logs"
+            logs := state.getLogsFrom(startIndex)   // copy server.log from startIndex to the end to "logs"
             event1 := AppendRequestEvent{
                 FromId:       state.server_id,
                 Term:         state.CurrentTerm,
                 PrevLogIndex: prevLog.Index,
                 PrevLogTerm:  prevLog.Term,
-                Entries:      logs,
+                Entries:      *logs,
                 LeaderCommit: state.commitIndex}
             action := SendAction{ToId: event.FromId, Event: event1}
             actions = append(actions, action)
@@ -689,24 +648,24 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             state.nextIndex[event.FromId] = event.LastLogIndex + 1
 
             // lets sort
-            sorted := append([]int{}, state.matchIndex[1:]...)
-            //matchCopy = []int{4,3,7,9,1,6}
-            sort.IntSlice(sorted).Sort() // sort in ascending order
+            sorted := int64Slice(append([]int64{}, state.matchIndex[1:]...))
+            sort.Sort(sorted)               // sort in ascending order
+            
             // If there exists an N such that N > commitIndex, a majority
             // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
             // set commitIndex = N
             for i := state.numberOfNodes / 2; i >= 0; i-- {
-                if sorted[i] > state.commitIndex && state.logs[sorted[i]].Term == state.CurrentTerm {
+                if sorted[i] > state.commitIndex && state.getLogOf(sorted[i]).Term == state.CurrentTerm {
                     // Commit all not committed eligible entries
                     for k := state.commitIndex + 1; k <= sorted[i]; k++ {
                         action := CommitAction{
-                            Log:  state.logs[k],
+                            Log:  *state.getLogOf(k),
                             Err:   nil}
                         actions = append(actions, action)
                     }
 
                     //server.commitIndex = sorted[i]
-                    state.setCommitIndex(sorted[i])
+                    state.commitIndex = sorted[i]
                     break
                 }
             }
@@ -800,10 +759,9 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
             Entries:      logs,
             LeaderCommit: state.commitIndex}
 
-        state.logs = append(state.logs, log)                          // Append to self log
-        state.matchIndex[state.server_id] = state.getLastLog().Index // Update self matchIndex
+        state.PersistentLog.Append(log)                                 // Append to self log
+        state.matchIndex[state.server_id] = state.getLastLog().Index    // Update self matchIndex
 
-        actions = append(actions, LogStore{Index: log.Index, Term:log.Term, Data: log.Data})
         actions = append(actions, state.broadcast(appendReq)...)
     case CANDIDATE:
         fallthrough
@@ -813,16 +771,6 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
     return actions
 }
 
-func (state *StateMachine) checkLogConsistency() {
-
-    for i:=1 ; i<len(state.logs) ; i++ {
-        if state.logs[i].Index != state.logs[i-1].Index+1 {
-            state.log_error(3, "Log inconsistency found on server : \n%v", state)
-            return
-        }
-    }
-}
-
 /********************************************************************
  *                                                                  *
  *                          Process event                           *
@@ -830,7 +778,6 @@ func (state *StateMachine) checkLogConsistency() {
  ********************************************************************/
 func (state *StateMachine) ProcessEvent(event interface{}) []interface{} {
     // Initialise the variables and timeout
-    defer state.checkLogConsistency()   // TODO:: debug
 
     switch event.(type) {
     case AppendRequestEvent:

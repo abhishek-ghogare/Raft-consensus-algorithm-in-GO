@@ -55,7 +55,7 @@ type RaftNode struct {
 func (rn *RaftNode) Append(data interface{}) {
     rn.eventCh <- rsm.AppendEvent{Data: data}
 }
-func (rn *RaftNode) UpdateLastApplied(index int) {
+func (rn *RaftNode) UpdateLastApplied(index int64) {
     rn.eventCh <- rsm.UpdateLastAppliedEvent{Index: index}
 }
 // TODO:: Update lastapplied function here, sends event on eventCh
@@ -167,21 +167,6 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             rn.log_info(3, "commitAction received %+v", action)
             action := action.(rsm.CommitAction)
             rn.CommitChannel <- action
-
-
-        /*
-         *  Log store action
-         */
-        case rsm.LogStore :
-            rn.log_info(3, "logStore received")
-            action := action.(rsm.LogStore)
-            lastInd := int(rn.logs.GetLastIndex())
-            if lastInd >= action.Index {
-                rn.logs.TruncateToEnd(int64(action.Index)) // Truncate extra entries
-            } else if lastInd < action.Index - 1 {
-                rn.log_error(3, "Log inconsistency found")
-            }
-            rn.logs.Append(rsm.LogEntry{Index:action.Index, Term:action.Term, Data:action.Data})
 
         /*
          *  Alarm action

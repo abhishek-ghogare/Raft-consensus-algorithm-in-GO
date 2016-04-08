@@ -61,11 +61,11 @@ func New(config *Config) (server *StateMachine) {
         CurrentTerm     : 0,
         VotedFor        : -1,
         numberOfNodes   : config.NumOfNodes,
-        logs            : []LogEntry{{Term: 0, Index: 0, Data: "Dummy Log"}}, // Initialising log with single empty log, to make life easier in future checking
+//        logs            : []LogEntry{{Term: 0, Index: 0, Data: "Dummy Log"}}, // Initialising log with single empty log, to make life easier in future checking
         commitIndex     : 0,
         LastApplied     : 0,
-        nextIndex       : make([]int, config.NumOfNodes+1),
-        matchIndex      : make([]int, config.NumOfNodes+1),
+        nextIndex       : make([]int64, config.NumOfNodes+1),
+        matchIndex      : make([]int64, config.NumOfNodes+1),
         receivedVote    : make([]int, config.NumOfNodes+1),
         myState         : FOLLOWER,
         ElectionTimeout : config.ElectionTimeout,
@@ -97,7 +97,7 @@ func Restore(config *Config) (state *StateMachine) {
     new_state.CurrentTerm   = restored_state.CurrentTerm
     new_state.VotedFor      = restored_state.VotedFor
     new_state.LastApplied   = restored_state.LastApplied
-    new_state.logs          = make([]LogEntry,0)
+//    new_state.logs          = make([]LogEntry,0)
 
 
     // Restore last log of restored_state from persistent storage
@@ -109,16 +109,14 @@ func Restore(config *Config) (state *StateMachine) {
     defer lg.Close()
     new_state.PersistentLog = lg // temp storing lg
 
-    lastLogEntry, err := lg.Get(lg.GetLastIndex())
     if err != nil {
         new_state.log_error(3, "Error in reading log : %v", err.Error())
         return nil
     }
 
-    new_state.logs = append(new_state.logs, lastLogEntry.(LogEntry))
     new_state.log_info(3, "Last log from persistent store restored")
 
-    new_state.setCommitIndex( restored_state.LastApplied )
+    new_state.commitIndex = restored_state.LastApplied
     new_state.PersistentLog = nil
     return new_state
 }
