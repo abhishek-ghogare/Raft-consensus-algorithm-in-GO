@@ -10,7 +10,11 @@ import (
     "cs733/assignment4/filesystem/fs"
     "sync"
     rsm "cs733/assignment4/raft_node/raft_state_machine"
+    "cs733/assignment4/raft_config"
 )
+
+var config_file_path = ""
+
 var crlf = []byte{'\r', '\n'}
 
 /****
@@ -154,8 +158,18 @@ func handleCommits() {
     }
 }
 
-func serverMain() {
-    tcpaddr, err := net.ResolveTCPAddr("tcp", "localhost:8080")
+func serverMain(config *raft_config.Config, restore bool) {
+
+    if restore {
+        raft = raft_node.RestoreServerState(config)
+    } else {
+        raft = raft_node.NewRaftNode(config)
+    }
+
+    raft.Start()
+
+
+    tcpaddr, err := net.ResolveTCPAddr("tcp", "localhost:"+strconv.Itoa(config.ClientPort))
     check(err)
     tcp_acceptor, err := net.ListenTCP("tcp", tcpaddr)
     check(err)
@@ -168,6 +182,26 @@ func serverMain() {
     }
 }
 
-func main() {
-    serverMain()
+func main(config_path string) {
+
+/*
+
+    type Config struct {
+        Id               int    // this node's id. One of the cluster's entries should match.
+        LogDir           string // Log file directory for this node
+        ElectionTimeout  int
+        HeartbeatTimeout int
+        NumOfNodes       int
+        MockServer       *mock.MockServer
+
+                                // Client side config
+        ClientPort      int
+    }
+
+*/
+
+
+
+
+    //serverMain()
 }
