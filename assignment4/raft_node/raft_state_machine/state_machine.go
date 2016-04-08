@@ -205,8 +205,8 @@ func (state *StateMachine) getLastLog() *LogEntry {
 func (state *StateMachine)GetLogOf(index int64) *LogEntry {
     l, e := state.PersistentLog.Get(index)
     if e!=nil {
-        state.log_error(4, "Persistent log access error : %v", e.Error())
-        panic("PANNICING") // TODO:: for leveldb: not found error
+        state.log_error(4, "Persistent log access error : %v : last index:%v  | accessed index:%v", e.Error(), state.PersistentLog.GetLastIndex(), index)
+        panic("PANNICING") // TODO:: for leveldb: not found error, because the key doesn't exist in leveldb
         return nil
     }
 
