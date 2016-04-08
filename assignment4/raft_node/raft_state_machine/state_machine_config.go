@@ -4,18 +4,8 @@ import (
     "os"
     "encoding/json"
     "github.com/cs733-iitb/log"
-    "github.com/cs733-iitb/cluster/mock"
+    "cs733/assignment4/raft_config"
 )
-
-type Config struct {
-    Id               int    // this node's id. One of the cluster's entries should match.
-    LogDir           string // Log file directory for this node
-    ElectionTimeout  int
-    HeartbeatTimeout int
-    NumOfNodes       int
-    MockServer       *mock.MockServer
-}
-
 
 func fromServerStateFile(serverStateFile string) (serState *StateMachine, err error) {
     var state StateMachine
@@ -55,7 +45,7 @@ func (state *StateMachine) ToServerStateFile(serverStateFile string) (err error)
  *
  *
  */
-func New(config *Config) (server *StateMachine) {
+func New(config *raft_config.Config) (server *StateMachine) {
 
 
     server = &StateMachine{
@@ -95,7 +85,7 @@ func New(config *Config) (server *StateMachine) {
  *
  *
  */
-func Restore(config *Config) (state *StateMachine) {
+func Restore(config *raft_config.Config) (state *StateMachine) {
     // Restore from file
     restored_state, err := fromServerStateFile(config.LogDir + RaftStateFile)
     if err != nil {

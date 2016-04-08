@@ -2,11 +2,12 @@ package raft_node
 
 import (
     rsm "cs733/assignment4/raft_node/raft_state_machine"
+    "cs733/assignment4/raft_config"
 )
 
 
 // Returns a Node object
-func NewRaftNode(config *rsm.Config) *RaftNode {
+func NewRaftNode(config *raft_config.Config) *RaftNode {
 
     (&RaftNode{}).log_info(3, "Opening log file : %v", config.LogDir)
 
@@ -28,7 +29,7 @@ func NewRaftNode(config *rsm.Config) *RaftNode {
     return &raft
 }
 
-func RestoreServerState(config *rsm.Config) *RaftNode {
+func RestoreServerState(config *raft_config.Config) *RaftNode {
 
     server_state := rsm.Restore(config)
     raft := RaftNode{

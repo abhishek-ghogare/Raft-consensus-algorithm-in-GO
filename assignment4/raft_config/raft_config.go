@@ -1,4 +1,4 @@
-package config
+package raft_config
 
 import (
 	"os"

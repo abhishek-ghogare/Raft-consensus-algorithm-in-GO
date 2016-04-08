@@ -160,6 +160,7 @@ func serverMain() {
     tcp_acceptor, err := net.ListenTCP("tcp", tcpaddr)
     check(err)
 
+    go handleCommits()
     for {
         tcp_conn, err := tcp_acceptor.AcceptTCP()
         check(err)

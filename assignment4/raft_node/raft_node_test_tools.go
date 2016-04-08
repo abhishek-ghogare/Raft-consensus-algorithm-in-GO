@@ -8,7 +8,7 @@ import (
     "github.com/cs733-iitb/cluster/mock"
     rsm "cs733/assignment4/raft_node/raft_state_machine"
     "cs733/assignment4/logging"
-	"encoding/json"
+    "cs733/assignment4/raft_config"
     "errors"
 )
 
@@ -33,40 +33,10 @@ func expect(t *testing.T, found interface{}, expected interface{}, msg string) {
 }
 
 
-
-func ToConfigFile(configFile string, config rsm.Config) (err error) {
-	var f *os.File
-	if f, err = os.Create(configFile); err != nil {
-		return err
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	if err = enc.Encode(config); err != nil {
-		return err
-	}
-	return nil
-}
-
-func FromConfigFile(configFile string) (config *rsm.Config, err error) {
-	var cfg rsm.Config
-    var f *os.File
-    if f, err = os.Open(configFile); err != nil {
-        return nil, err
-    }
-    defer f.Close()
-    dec := json.NewDecoder(f)
-    if err = dec.Decode(&cfg); err != nil {
-        return nil, err
-    }
-	return &cfg, nil
-}
-
-
-
 func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 	node_index := node_id - 1
 
-	config, err := FromConfigFile("/tmp/raft/node" + strconv.Itoa(node_id) + "/config.json")
+	config, err := raft_config.FromConfigFile("/tmp/raft/node" + strconv.Itoa(node_id) + "/config.json")
 	log_info(3, "Node config read : %+v", config)
 	if err != nil {
 		t.Fatalf("Error reopening config : %v", err.Error())
@@ -85,14 +55,14 @@ func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 }
 
 
-func makeConfigs() []*rsm.Config {
+func makeConfigs() []*raft_config.Config {
     var err error
     mockCluster, err = mock.NewCluster(nil)
     if err != nil {
         log_error(3, "Error in creating CLUSTER : %v", err.Error())
     }
 
-    configBase := rsm.Config{
+    configBase := raft_config.Config{
         //NodeNetAddrList 	:nodeNetAddrList,
         Id                  :1,
         LogDir              :"log file", // Log file directory for this node
@@ -100,7 +70,7 @@ func makeConfigs() []*rsm.Config {
         HeartbeatTimeout    :100,
         NumOfNodes          :5}
 
-    var configs []*rsm.Config
+    var configs []*raft_config.Config
     for i := 1; i <= 5; i++ {
         config := configBase // Copy config
         config.Id = i
@@ -115,9 +85,9 @@ func makeConfigs() []*rsm.Config {
 
 func makeRafts() Rafts {
     var rafts Rafts
-    for _, config := range makeConfigs() {
-        raft := NewRaftNode(config)
-        err := ToConfigFile(config.LogDir + "config.json", *config)
+    for _, conf := range makeConfigs() {
+        raft := NewRaftNode(conf)
+        err := raft_config.ToConfigFile(conf.LogDir + "config.json", *conf)
         if err != nil {
             log_error(3, "Error in storing config to file : %v", err.Error())
         }
