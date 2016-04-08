@@ -56,12 +56,14 @@ func (state *StateMachine) ToServerStateFile(serverStateFile string) (err error)
  *
  */
 func New(config *Config) (server *StateMachine) {
+
+
     server = &StateMachine{
         server_id       : config.Id,
         CurrentTerm     : 0,
         VotedFor        : -1,
         numberOfNodes   : config.NumOfNodes,
-//        logs            : []LogEntry{{Term: 0, Index: 0, Data: "Dummy Log"}}, // Initialising log with single empty log, to make life easier in future checking
+        PersistentLog   : nil,
         commitIndex     : 0,
         LastApplied     : 0,
         nextIndex       : make([]int64, config.NumOfNodes+1),
@@ -70,6 +72,15 @@ func New(config *Config) (server *StateMachine) {
         myState         : FOLLOWER,
         ElectionTimeout : config.ElectionTimeout,
         HeartbeatTimeout: config.HeartbeatTimeout}
+
+    // Open persistent log
+    lg, err := log.Open(config.LogDir)
+    if err != nil {
+        server.log_error(3, "Unable to open log file : %v\n", err)
+        return nil
+    }
+    server.PersistentLog = lg
+    server.PersistentLog.Append(LogEntry{Index:0, Term:0, Data:"Dummy Entry"})
 
     for i := 0; i <= config.NumOfNodes; i++ {
         server.nextIndex[i] = 1  // Set to index of next log to send
@@ -97,26 +108,8 @@ func Restore(config *Config) (state *StateMachine) {
     new_state.CurrentTerm   = restored_state.CurrentTerm
     new_state.VotedFor      = restored_state.VotedFor
     new_state.LastApplied   = restored_state.LastApplied
-//    new_state.logs          = make([]LogEntry,0)
+    new_state.commitIndex   = restored_state.LastApplied
 
-
-    // Restore last log of restored_state from persistent storage
-    lg, err := log.Open(config.LogDir)
-    if err != nil {
-        new_state.log_error(3, "Unable to open log file : %v\n", err)
-        return nil
-    }
-    defer lg.Close()
-    new_state.PersistentLog = lg // temp storing lg
-
-    if err != nil {
-        new_state.log_error(3, "Error in reading log : %v", err.Error())
-        return nil
-    }
-
-    new_state.log_info(3, "Last log from persistent store restored")
-
-    new_state.commitIndex = restored_state.LastApplied
-    new_state.PersistentLog = nil
+    new_state.PersistentLog.TruncateToEnd(new_state.PersistentLog.GetLastIndex())   // removing dummy entry appended in New(config)
     return new_state
 }

@@ -155,7 +155,7 @@ type StateMachine struct {
 
                              // Non-persistent state
     server_id     int
-    commitIndex   int64      // initialised to 0    // TODO:: remove state store for commitIndex update
+    commitIndex   int64      // initialised to 0
     nextIndex   []int64      // Using first 0th dummy entry for all arrays
     matchIndex  []int64      // Using first 0th dummy entry for all arrays
     myState     RaftState    // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
@@ -185,7 +185,6 @@ type StateMachine struct {
 // Returns StateStore action structure embedding cloned state
 func (state *StateMachine) GetStateStoreAction() StateStore {
     server_copy         := StateMachine{
-        commitIndex         : state.commitIndex,    // TODO:: remove this line
         LastApplied         : state.LastApplied,
         ElectionTimeout     : state.ElectionTimeout,
         HeartbeatTimeout    : state.HeartbeatTimeout,
@@ -199,11 +198,11 @@ func (state *StateMachine) GetStateStoreAction() StateStore {
  */
 //  Returns last log entry
 func (state *StateMachine) getLastLog() *LogEntry {
-    log := state.getLogOf(state.PersistentLog.GetLastIndex())
+    log := state.GetLogOf(state.PersistentLog.GetLastIndex())
     return log
 }
 //  Return log of given index
-func (state *StateMachine)getLogOf(index int64) *LogEntry {
+func (state *StateMachine)GetLogOf(index int64) *LogEntry {
     l, e := state.PersistentLog.Get(index)
     if e!=nil {
         state.log_error(4, "Persistent log access error : %v", e.Error())
@@ -510,7 +509,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
 
         // Check if previous entries are missing
         if state.getLastLog().Index < event.PrevLogIndex ||
-           state.getLogOf(event.PrevLogIndex).Term /*logs[event.PrevLogIndex].Term*/ != event.PrevLogTerm {
+           state.GetLogOf(event.PrevLogIndex).Term /*logs[event.PrevLogIndex].Term*/ != event.PrevLogTerm {
             // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
             appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: state.CurrentTerm, Success: false, LastLogIndex: state.getLastLog().Index}
             resp := SendAction{ToId: event.FromId, Event: appendResp}
@@ -552,8 +551,8 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
 
             // Commit all logs from commitFrom to commitUpto
             for i := commitFrom; i <= commitUpto; i++ {
-                action := CommitAction{Log: *state.getLogOf(i), Err: nil}
-                state.log_info(3, "Commiting index %v, data:%v", i, state.getLogOf(i).Data)
+                action := CommitAction{Log: *state.GetLogOf(i), Err: nil}
+                state.log_info(3, "Commiting index %v, data:%v", i, state.GetLogOf(i).Data)
                 actions = append(actions, action)
             }
         }
@@ -630,7 +629,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             }
 
             // Resend all logs from the holes to the end
-            prevLog := state.getLogOf(state.nextIndex[event.FromId]-1)
+            prevLog := state.GetLogOf(state.nextIndex[event.FromId]-1)
             startIndex := state.nextIndex[event.FromId]
             logs := state.getLogsFrom(startIndex)   // copy server.log from startIndex to the end to "logs"
             event1 := AppendRequestEvent{
@@ -650,16 +649,16 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             // lets sort
             sorted := int64Slice(append([]int64{}, state.matchIndex[1:]...))
             sort.Sort(sorted)               // sort in ascending order
-            
+
             // If there exists an N such that N > commitIndex, a majority
             // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
             // set commitIndex = N
             for i := state.numberOfNodes / 2; i >= 0; i-- {
-                if sorted[i] > state.commitIndex && state.getLogOf(sorted[i]).Term == state.CurrentTerm {
+                if sorted[i] > state.commitIndex && state.GetLogOf(sorted[i]).Term == state.CurrentTerm {
                     // Commit all not committed eligible entries
                     for k := state.commitIndex + 1; k <= sorted[i]; k++ {
                         action := CommitAction{
-                            Log:  *state.getLogOf(k),
+                            Log:  *state.GetLogOf(k),
                             Err:   nil}
                         actions = append(actions, action)
                     }

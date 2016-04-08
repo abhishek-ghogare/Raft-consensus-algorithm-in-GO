@@ -3,7 +3,6 @@ package raft_node
 import (
     "encoding/gob"
     "github.com/cs733-iitb/cluster"
-    "github.com/cs733-iitb/log"
     "math/rand"
     "reflect"
     "time"
@@ -37,7 +36,7 @@ type RaftNode struct {
     LogDir          string // Log file directory for this node
     server_state    *rsm.StateMachine
     clusterServer   *mock.MockServer
-    logs            *log.Log
+//    logs            *log.Log
     timer           *time.Timer
 
                            // A channel for client to listen on. What goes into Append must come out of here at some point.
@@ -55,10 +54,10 @@ type RaftNode struct {
 func (rn *RaftNode) Append(data interface{}) {
     rn.eventCh <- rsm.AppendEvent{Data: data}
 }
+// Called from client handler, which will first apply a log to state machine then instructs here to update lastApplied
 func (rn *RaftNode) UpdateLastApplied(index int64) {
     rn.eventCh <- rsm.UpdateLastAppliedEvent{Index: index}
 }
-// TODO:: Update lastapplied function here, sends event on eventCh
 
 func (rn *RaftNode) processEvents() {
     rn.log_info(3, "Process events started")
@@ -88,7 +87,6 @@ func (rn *RaftNode) processEvents() {
                 actions := rn.server_state.ProcessEvent(ev)
                 rn.doActions(actions)
             case rsm.UpdateLastAppliedEvent:
-                // TODO:: handle update lastApplied here
                 rn.log_info(3, "Update last applied event received")
                 rn.server_state.LastApplied = ev.(rsm.UpdateLastAppliedEvent).Index
                 stateStoreAction := rn.server_state.GetStateStoreAction()
@@ -119,8 +117,8 @@ func (rn *RaftNode) processEvents() {
                 close(rn.CommitChannel)
                 close(rn.eventCh)
                 close(rn.timeoutCh)
+                rn.server_state.PersistentLog.Close()
                 (*rn.clusterServer).Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
-                rn.logs.Close() //TODO:: leveldb not found problem when restore testcase is executed first
                 rn.server_state = &rsm.StateMachine{}
                 rn.waitShutdown.Done()
                 return
@@ -227,19 +225,13 @@ func (rn *RaftNode) GetId() int {
     }
 }
 
-func (rn *RaftNode) GetLogAt(index int) rsm.LogEntry { // TODO:: return nil on error
+func (rn *RaftNode) GetLogAt(index int64) rsm.LogEntry { // TODO:: return nil on error
     if ! rn.IsNodeInitialized() {
         log_warning(4, "Node not initialized")
         return rsm.LogEntry{};
     }
 
-    log, err := rn.logs.Get(int64(index))
-    if err != nil {
-        log_error(4, "Log access error : %v", err.Error())
-        return rsm.LogEntry{};
-    }
-
-    return log.(rsm.LogEntry)
+    return *rn.server_state.GetLogOf(index)
 }
 
 func (rn *RaftNode) GetCurrentTerm() int {
