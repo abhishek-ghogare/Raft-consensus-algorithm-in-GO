@@ -62,7 +62,8 @@ func New(config *Config) (server *StateMachine) {
         VotedFor        : -1,
         numberOfNodes   : config.NumOfNodes,
         logs            : []LogEntry{{Term: 0, Index: 0, Data: "Dummy Log"}}, // Initialising log with single empty log, to make life easier in future checking
-        CommitIndex     : 0,
+        commitIndex     : 0,
+        LastApplied     : 0,
         nextIndex       : make([]int, config.NumOfNodes+1),
         matchIndex      : make([]int, config.NumOfNodes+1),
         receivedVote    : make([]int, config.NumOfNodes+1),
@@ -95,6 +96,7 @@ func Restore(config *Config) (state *StateMachine) {
     new_state              := New(config)
     new_state.CurrentTerm   = restored_state.CurrentTerm
     new_state.VotedFor      = restored_state.VotedFor
+    new_state.LastApplied   = restored_state.LastApplied
     new_state.logs          = make([]LogEntry,0)
 
 
@@ -116,7 +118,7 @@ func Restore(config *Config) (state *StateMachine) {
     new_state.logs = append(new_state.logs, lastLogEntry.(LogEntry))
     new_state.log_info(3, "Last log from persistent store restored")
 
-    new_state.setCommitIndex( restored_state.CommitIndex )
+    new_state.setCommitIndex( restored_state.LastApplied )
     new_state.PersistentLog = nil
     return new_state
 }

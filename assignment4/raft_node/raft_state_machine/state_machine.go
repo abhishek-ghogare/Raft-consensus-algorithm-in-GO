@@ -1,7 +1,7 @@
 package raft_state_machine
 
 import (
-    "cs733/assignment3/logging"
+    "cs733/assignment4/logging"
     "fmt"
     "github.com/cs733-iitb/log"
     "math/rand"
@@ -37,7 +37,7 @@ const RandomTimeout = 200
 type LogEntry struct {
     Term  int
     Index int
-    Data  string
+    Data  interface{}
 }
 
 /********************************************************************
@@ -78,9 +78,11 @@ type TimeoutEvent struct {
 }
 
 type AppendEvent struct {
-    Data string
+    Data interface{}
 }
-
+type UpdateLastAppliedEvent struct {
+    Index int
+}
 /********************************************************************
  *                                                                  *
  *                          Output actions                          *
@@ -94,9 +96,25 @@ type SendAction struct {
 // Data goes in via Append, comes out as CommitInfo from the node's CommitChannel
 // Index is valid only if err == nil
 type CommitAction struct {
-    Index int // for error, set to -1
-    Data  LogEntry
-    Err   string
+    // Removing Index, since it is not used
+    //Index int // for error, set to -1
+    Log LogEntry
+    Err error
+}
+type Error_Commit struct {}
+func (err Error_Commit) Error() string {
+    return "Unable to commit the data"
+}
+type Error_NotLeader struct {
+    LeaderAddr string
+    LeaderPort int
+}
+func (err Error_NotLeader) Error() string{
+    if err.LeaderAddr != "" {
+        return fmt.Sprintf("This server is not a leader, current leader : %v:%v", err.LeaderAddr, err.LeaderPort)
+    } else {
+        return "This server is not a leader, current leader is unknown"
+    }
 }
 
 type LogStore LogEntry
@@ -124,7 +142,7 @@ type StateMachine struct {
                              // Persistent state
     CurrentTerm   int
     VotedFor      int        // -1: not voted
-    CommitIndex   int        // initialised to 0
+    LastApplied   int        // Updated by client handler when the log is applied to its state machine // TODO:: update changes for this
     numberOfNodes int
 
                              // log is initialised with single dummy log, to make life easier in future checking
@@ -134,7 +152,7 @@ type StateMachine struct {
 
                              // Non-persistent state
     server_id     int
-                             // lastApplied int      // not used here, duplicate committing is detected and handled in upper layer of raft
+    commitIndex   int        // initialised to 0    // TODO:: remove state store for commitIndex update
     nextIndex   []int        // Using first 0th dummy entry for all arrays
     matchIndex  []int        // Using first 0th dummy entry for all arrays
     myState     RaftState    // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
@@ -148,23 +166,24 @@ type StateMachine struct {
     ElectionTimeout  int
     HeartbeatTimeout int
 
-     /**
-      *      Few assumptions and implementation according :
-      *      1.  All the logs in memory and also on persistent store are has strictly increasing order of indices with
-      *          the difference of 1.
-      *      2.  There will always be at least one log in in-memory log at any time, which will be used to compare
-      *          prevLogIndex and prevLogTerm while appending new entries.
-      *      3.  Logs are not loaded into memory from persistent store when node becomes alive, but loads only last log,
-      *          so that it can be used for future checking while append request comes.
-      *      4.  Logs from commitIndex onwards are loaded into in-memory log from persistent store only when commitIndex
-      *          is updated
-      */
+                             /**
+			      *      Few assumptions and implementation according :
+			      *      1.  All the logs in memory and also on persistent store are has strictly increasing order of indices with
+			      *          the difference of 1.
+			      *      2.  There will always be at least one log in in-memory log at any time, which will be used to compare
+			      *          prevLogIndex and prevLogTerm while appending new entries.
+			      *      3.  Logs are not loaded into memory from persistent store when node becomes alive, but loads only last log,
+			      *          so that it can be used for future checking while append request comes.
+			      *      4.  Logs from commitIndex onwards are loaded into in-memory log from persistent store only when commitIndex
+			      *          is updated
+			      */
 }
 
 // Returns StateStore action structure embedding cloned state
-func (state *StateMachine) getStateStoreAction() StateStore {
+func (state *StateMachine) GetStateStoreAction() StateStore {
     server_copy         := StateMachine{
-        CommitIndex         : state.CommitIndex,
+        commitIndex         : state.commitIndex,    // TODO:: remove this line
+        LastApplied         : state.LastApplied,
         ElectionTimeout     : state.ElectionTimeout,
         HeartbeatTimeout    : state.HeartbeatTimeout,
         CurrentTerm         : state.CurrentTerm,
@@ -273,7 +292,7 @@ func (state *StateMachine) setCommitIndex(commitIndex int) {
         state.logs = *state.getLogsFrom(commitIndex)
     }
     state.log_info(4, "Updating commit index to : %v", commitIndex)
-    state.CommitIndex = commitIndex
+    state.commitIndex = commitIndex
 }
 
 //  Returns current server state
@@ -325,7 +344,7 @@ func (state *StateMachine) voteRequest(event RequestVoteEvent) (actions []interf
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append(actions, state.getStateStoreAction())
+            actions = append(actions, state.GetStateStoreAction())
         }
     }()
 
@@ -392,7 +411,7 @@ func (state *StateMachine) voteRequestResponse(event RequestVoteRespEvent) (acti
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append(actions, state.getStateStoreAction())
+            actions = append(actions, state.GetStateStoreAction())
         }
     }()
 
@@ -457,7 +476,7 @@ func (state *StateMachine) voteRequestResponse(event RequestVoteRespEvent) (acti
                     PrevLogIndex: state.getLastLog().Index,
                     PrevLogTerm:  state.getLastLog().Term,
                     Entries:      []LogEntry{},
-                    LeaderCommit: state.CommitIndex}
+                    LeaderCommit: state.commitIndex}
 
                 alarm := AlarmAction{Time: state.HeartbeatTimeout}
                 actions = append(actions, alarm)
@@ -485,7 +504,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
         if state_changed_flag {
             // Prepend StateStore action
             state.log_info(3, "Appending state store action")
-            actions = append(actions, state.getStateStoreAction())
+            actions = append(actions, state.GetStateStoreAction())
         }
     }()
 
@@ -559,7 +578,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
             truncatedLogs := state.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1]
             state.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
             for _, log := range *truncatedLogs {
-                action := CommitAction{Index: log.Index, Data: log, Err: "Log truncated"}
+                action := CommitAction{Log: log, Err: Error_Commit{}}
                 actions = append(actions, action)
             }
         }
@@ -572,24 +591,23 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
             actions = append(actions, action)
         }
 
-        if event.LeaderCommit > state.CommitIndex {
+        if event.LeaderCommit > state.commitIndex {
             var commitFrom, commitUpto int
             // If leader has commited entries, so should this server
             if event.LeaderCommit <= state.getLastLog().Index {
-                commitFrom = state.CommitIndex + 1
+                commitFrom = state.commitIndex + 1
                 commitUpto = event.LeaderCommit
             } else {
-                commitFrom = state.CommitIndex + 1
+                commitFrom = state.commitIndex + 1
                 commitUpto = state.getLastLog().Index
             }
 
             // Loads logs from persistent store from commitIndex to end if not in in-memory logs
             state.setCommitIndex(commitUpto)
-            state_changed_flag = true
 
             // Commit all logs from commitFrom to commitUpto
             for i := commitFrom; i <= commitUpto; i++ {
-                action := CommitAction{Index: i, Data: *state.getLogOf(i), Err: ""}
+                action := CommitAction{Log: *state.getLogOf(i), Err: nil}
                 state.log_info(3, "Commiting index %v, data:%v", i, state.getLogOf(i).Data)
                 actions = append(actions, action)
             }
@@ -626,7 +644,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append(actions, state.getStateStoreAction())
+            actions = append(actions, state.GetStateStoreAction())
         }
     }()
 
@@ -662,7 +680,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
                 PrevLogIndex: prevLog.Index,
                 PrevLogTerm:  prevLog.Term,
                 Entries:      logs,
-                LeaderCommit: state.CommitIndex}
+                LeaderCommit: state.commitIndex}
             action := SendAction{ToId: event.FromId, Event: event1}
             actions = append(actions, action)
             return actions
@@ -678,19 +696,17 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
             // set commitIndex = N
             for i := state.numberOfNodes / 2; i >= 0; i-- {
-                if sorted[i] > state.CommitIndex && state.logs[sorted[i]].Term == state.CurrentTerm {
+                if sorted[i] > state.commitIndex && state.logs[sorted[i]].Term == state.CurrentTerm {
                     // Commit all not committed eligible entries
-                    for k := state.CommitIndex + 1; k <= sorted[i]; k++ {
+                    for k := state.commitIndex + 1; k <= sorted[i]; k++ {
                         action := CommitAction{
-                            Index: k,
-                            Data:  state.logs[k],
-                            Err:   ""}
+                            Log:  state.logs[k],
+                            Err:   nil}
                         actions = append(actions, action)
                     }
 
                     //server.commitIndex = sorted[i]
                     state.setCommitIndex(sorted[i])
-                    state_changed_flag = true
                     break
                 }
             }
@@ -721,7 +737,7 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
     defer func() {
         if state_changed_flag {
             // Prepend StateStore action
-            actions = append(actions, state.getStateStoreAction())
+            actions = append(actions, state.GetStateStoreAction())
         }
     }()
 
@@ -735,7 +751,7 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
             PrevLogIndex: state.getLastLog().Index,
             PrevLogTerm:  state.getLastLog().Term,
             Entries:      []LogEntry{},
-            LeaderCommit: state.CommitIndex}
+            LeaderCommit: state.commitIndex}
         heartbeatActions := state.broadcast(heartbeatEvent) // broadcast request vote event
         actions = append(actions, heartbeatActions...)
         actions = append(actions, AlarmAction{Time: state.HeartbeatTimeout})
@@ -782,7 +798,7 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
             PrevLogIndex: state.getLastLog().Index,
             PrevLogTerm:  state.getLastLog().Term,
             Entries:      logs,
-            LeaderCommit: state.CommitIndex}
+            LeaderCommit: state.commitIndex}
 
         state.logs = append(state.logs, log)                          // Append to self log
         state.matchIndex[state.server_id] = state.getLastLog().Index // Update self matchIndex
@@ -790,7 +806,9 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
         actions = append(actions, LogStore{Index: log.Index, Term:log.Term, Data: log.Data})
         actions = append(actions, state.broadcast(appendReq)...)
     case CANDIDATE:
+        fallthrough
     case FOLLOWER:
+    // TODO:: handle non leader error, use currentLeader variable  and clear it for every term change, and update on heartbeat and etc
     }
     return actions
 }

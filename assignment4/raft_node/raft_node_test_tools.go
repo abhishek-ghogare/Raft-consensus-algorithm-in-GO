@@ -6,8 +6,8 @@ import (
     "strconv"
     "os"
     "github.com/cs733-iitb/cluster/mock"
-    rsm "cs733/assignment3/raft_node/raft_state_machine"
-    "cs733/assignment3/logging"
+    rsm "cs733/assignment4/raft_node/raft_state_machine"
+    "cs733/assignment4/logging"
 	"encoding/json"
     "errors"
 )
@@ -248,15 +248,15 @@ func (rafts Rafts) checkSingleCommit(t *testing.T, data string) error{
                     } else {
                         select {
                         case ci := <-node.CommitChannel:
-                            if ci.Err != "" {
-                                log_warning(3, "Unable to commit the log : %v", ci.Err)
+                            if ci.Err != nil {
+                                log_warning(3, "Unable to commit the log : %v", ci.Err.Error())
                             } else {
                                 log_info(3, "Commit received at commit channel of %v", node.GetId())
                             }
                             checked[i] = true // Ignore from future consideration
                             checkedNum++
-                            if ci.Data.Data != data {
-                                t.Fatalf("Got different data : expected %v , received : %v", data, ci.Data.Data)
+                            if ci.Log.Data != data {
+                                t.Fatalf("Got different data : expected %v , received : %v", data, ci.Log.Data)
                             }
                         default:
                         }

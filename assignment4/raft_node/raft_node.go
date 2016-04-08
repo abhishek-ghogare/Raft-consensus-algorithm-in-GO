@@ -10,8 +10,8 @@ import (
     "sync"
     "strconv"
     "github.com/cs733-iitb/cluster/mock"
-    rsm "cs733/assignment3/raft_node/raft_state_machine"
-    "cs733/assignment3/logging"
+    rsm "cs733/assignment4/raft_node/raft_state_machine"
+    "cs733/assignment4/logging"
     "fmt"
 )
 
@@ -52,9 +52,13 @@ type RaftNode struct {
 
 
 // Client's message to Raft node
-func (rn *RaftNode) Append(data string) {
+func (rn *RaftNode) Append(data interface{}) {
     rn.eventCh <- rsm.AppendEvent{Data: data}
 }
+func (rn *RaftNode) UpdateLastApplied(index int) {
+    rn.eventCh <- rsm.UpdateLastAppliedEvent{Index: index}
+}
+// TODO:: Update lastapplied function here, sends event on eventCh
 
 func (rn *RaftNode) processEvents() {
     rn.log_info(3, "Process events started")
@@ -78,9 +82,19 @@ func (rn *RaftNode) processEvents() {
             actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
         case ev = <-rn.eventCh:
-            rn.log_info(3, "Append request received")
-            actions := rn.server_state.ProcessEvent(ev)
-            rn.doActions(actions)
+            switch ev.(type) {
+            case rsm.AppendEvent:
+                rn.log_info(3, "Append request received")
+                actions := rn.server_state.ProcessEvent(ev)
+                rn.doActions(actions)
+            case rsm.UpdateLastAppliedEvent:
+                // TODO:: handle update lastApplied here
+                rn.log_info(3, "Update last applied event received")
+                rn.server_state.LastApplied = ev.(rsm.UpdateLastAppliedEvent).Index
+                stateStoreAction := rn.server_state.GetStateStoreAction()
+                actions := []interface{}{stateStoreAction}
+                rn.doActions(actions)
+            }
         case ev = <-(*rn.clusterServer).Inbox():
             ev := ev.(*cluster.Envelope)
 
@@ -119,11 +133,12 @@ func (rn *RaftNode) processEvents() {
 }
 
 func (rn *RaftNode) doActions(actions [] interface{}) {
-
-    //var timer *Timer
-
     for _, action := range actions {
         switch action.(type) {
+
+        /*
+         *  Send Action
+         */
         case rsm.SendAction :
             action := action.(rsm.SendAction)
 
@@ -144,10 +159,19 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             } else {
                 (*rn.clusterServer).Outbox() <- &cluster.Envelope{Pid:action.ToId, Msg:action.Event}
             }
+
+        /*
+         *  Commit action
+         */
         case rsm.CommitAction :
             rn.log_info(3, "commitAction received %+v", action)
             action := action.(rsm.CommitAction)
             rn.CommitChannel <- action
+
+
+        /*
+         *  Log store action
+         */
         case rsm.LogStore :
             rn.log_info(3, "logStore received")
             action := action.(rsm.LogStore)
@@ -158,9 +182,17 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
                 rn.log_error(3, "Log inconsistency found")
             }
             rn.logs.Append(rsm.LogEntry{Index:action.Index, Term:action.Term, Data:action.Data})
+
+        /*
+         *  Alarm action
+         */
         case rsm.AlarmAction :
             action := action.(rsm.AlarmAction)
             rn.timer.Reset(time.Duration(action.Time) * time.Millisecond)
+
+        /*
+         *  State store action
+         */
         case rsm.StateStore:
             stateStore := action.(rsm.StateStore)
             rn.log_info(3, "state store received")
