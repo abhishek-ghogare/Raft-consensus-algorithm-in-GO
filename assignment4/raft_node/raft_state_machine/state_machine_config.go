@@ -60,6 +60,7 @@ func New(config *raft_config.Config) (server *StateMachine) {
         matchIndex      : make([]int64, config.NumOfNodes+1),
         receivedVote    : make([]int, config.NumOfNodes+1),
         myState         : FOLLOWER,
+        currentLdr      : config.Id,    // imposing that current leader is self
         ElectionTimeout : config.ElectionTimeout,
         HeartbeatTimeout: config.HeartbeatTimeout}
 
@@ -69,6 +70,7 @@ func New(config *raft_config.Config) (server *StateMachine) {
         server.log_error(3, "Unable to open log file : %v\n", err)
         return nil
     }
+    lg.SetCacheSize(1000000)    // TODO:: out of cache logs are not accessible
     server.PersistentLog = lg
     server.PersistentLog.Append(LogEntry{Index:0, Term:0, Data:"Dummy Entry"})
 

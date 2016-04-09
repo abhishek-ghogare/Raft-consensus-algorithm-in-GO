@@ -150,7 +150,6 @@ type StateMachine struct {
 
                              // log is initialised with single dummy log, to make life easier in future checking
                              // Index starts from 1, as first empty entry is present
-    //logs          []LogEntry // Using first 0th dummy entry for all arrays
     PersistentLog *log.Log   // Persistent log, used to retrieve logs which are not in memory
 
                              // Non-persistent state
@@ -158,7 +157,8 @@ type StateMachine struct {
     commitIndex   int64      // initialised to 0
     nextIndex   []int64      // Using first 0th dummy entry for all arrays
     matchIndex  []int64      // Using first 0th dummy entry for all arrays
-    myState     RaftState    // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
+    myState       RaftState  // CANDIDATE/FOLLOWER/LEADER, this server state {candidate, follower, leader}
+    currentLdr    int        // Id of the current leader, used to redirect client to the leader
 
                              // maintain received votes from other nodes,
                              // if vote received, set corresponding value to term for which the vote has received
@@ -206,6 +206,11 @@ func (state *StateMachine)GetLogOf(index int64) *LogEntry {
     l, e := state.PersistentLog.Get(index)
     if e!=nil {
         state.log_error(4, "Persistent log access error : %v : last index:%v  | accessed index:%v", e.Error(), state.PersistentLog.GetLastIndex(), index)
+        l, e = state.PersistentLog.Get(0)
+        state.log_error(3, "Persistent log access error : %v : %v", l, e)
+        l, e = state.PersistentLog.Get(1)
+        state.log_error(3, "Persistent log access error : %v : %v", l, e)
+        state.log_error(3, "Persistent log access error : %v", state.getLastLog())
         panic("PANNICING") // TODO:: for leveldb: not found error, because the key doesn't exist in leveldb
         return nil
     }
@@ -415,6 +420,7 @@ func (state *StateMachine) voteRequestResponse(event RequestVoteRespEvent) (acti
             } else if count > state.numberOfNodes/2 {
                 // become leader
 
+                state.currentLdr = state.GetServerId()  // update current leader
                 state.log_info(3, "Leader has been elected : %v", state.server_id)
                 state.initialiseLeader()
 
@@ -490,6 +496,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
         // Check term
         if state.CurrentTerm < event.Term {
             // This server term is not so up-to-date, so update
+            state.currentLdr = event.FromId     // current leader is the one from whom msg received
             state.CurrentTerm = event.Term
             state.VotedFor = -1
             state_changed_flag = true
@@ -625,8 +632,14 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
     case LEADER:
         if !event.Success {
             // there are holes in follower's log
+            // TODO:: We are not checking here if the requesting log is actually in our logs. Note that nextIndex is not monotonically increasing or decreasing, depending on it for sending logs and receiving logs will lead to errors
+            //
+
             if event.LastLogIndex < state.nextIndex[event.FromId] {
                 state.nextIndex[event.FromId] = event.LastLogIndex + 1
+            }
+            if state.nextIndex[event.FromId] > state.PersistentLog.GetLastIndex() {
+                state.log_error(3, "Next index of any node will never be grater than last log index of the leader")
             }
 
             // Resend all logs from the holes to the end
@@ -654,6 +667,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             // If there exists an N such that N > commitIndex, a majority
             // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
             // set commitIndex = N
+            state.log_info(3, "Sorted match indices : %v", sorted)
             for i := state.numberOfNodes / 2; i >= 0; i-- {
                 if sorted[i] > state.commitIndex && state.GetLogOf(sorted[i]).Term == state.CurrentTerm {
                     // Commit all not committed eligible entries
@@ -766,7 +780,6 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
     case CANDIDATE:
         fallthrough
     case FOLLOWER:
-    // TODO:: handle non leader error, use currentLeader variable  and clear it for every term change, and update on heartbeat and etc
     }
     return actions
 }
