@@ -11,9 +11,21 @@ import (
     "sync"
     rsm "cs733/assignment4/raft_node/raft_state_machine"
     "cs733/assignment4/raft_config"
+    "cs733/assignment4/logging"
 )
 
-var config_file_path = ""
+func (rn *ClientHandler) log_error(skip int, format string, args ...interface{}) {
+    format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
+    logging.Error(skip, format, args...)
+}
+func (rn *ClientHandler) log_info(skip int, format string, args ...interface{}) {
+    format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
+    logging.Info(skip, format, args...)
+}
+func (rn *ClientHandler) log_warning(skip int, format string, args ...interface{}) {
+    format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
+    logging.Warning(skip, format, args...)
+}
 
 var crlf = []byte{'\r', '\n'}
 
@@ -29,12 +41,73 @@ type Request struct {
     ReqId    int // Connection id, mapped into activeConn, from which request has arrived
     msg      fs.Msg
 }
-var raft        *raft_node.RaftNode
-var activeReq  map[int]net.TCPConn
-var nextConnId  int
-var connLock    sync.RWMutex
+
+type ClientHandler struct {
+    Raft            *raft_node.RaftNode
+    ActiveReq       map[int]net.TCPConn
+    ActiveReqLock   sync.RWMutex
+    NextConnId      int
+    ClientPort      int     //Port on which the client handler will listen
+}
+
+func New(config *raft_config.Config, restore bool) (ch *ClientHandler) {
+    ch = &ClientHandler{
+        ActiveReq   : make(map[int]net.TCPConn),
+        NextConnId  : 0,
+        ClientPort  : config.ClientPort }
+
+    if restore {
+        ch.Raft = raft_node.RestoreServerState(config)
+    } else {
+        ch.Raft = raft_node.NewRaftNode(config)
+    }
+
+    return ch
+}
+
+func (ch *ClientHandler) serverMain() {
+
+    ch.Raft.Start()
+
+    tcpaddr, err := net.ResolveTCPAddr("tcp", "localhost:"+strconv.Itoa(ch.ClientPort))
+    check(err)
+    tcp_acceptor, err := net.ListenTCP("tcp", tcpaddr)
+    check(err)
+
+    go ch.handleCommits()
+
+    go func () {
+        for {
+            tcp_conn, err := tcp_acceptor.AcceptTCP()
+            check(err)
+            go ch.serve(tcp_conn)
+        }
+    }()
+}
 
 
+// Add a connection to active request queue and returns request id
+func (ch *ClientHandler) AddConnection (conn *net.TCPConn) int {
+    ch.ActiveReqLock.Lock()
+    ch.NextConnId++
+    connId := ch.NextConnId
+    ch.ActiveReq [ connId ] = *conn
+    ch.ActiveReqLock.Unlock()
+    return connId
+}
+// Remove request from active requests
+func (ch *ClientHandler) RemoveConn (connId int) {
+    ch.ActiveReqLock.Lock()
+    delete(ch.ActiveReq, connId)
+    ch.ActiveReqLock.Unlock()
+}
+func (ch *ClientHandler) GetConn (connId int) net.TCPConn {
+    ch.ActiveReqLock.RLock()
+    conn := ch.ActiveReq[connId]
+    ch.log_info(4, "Connection extracted from map : id:%v conn:%v", connId, conn)
+    ch.ActiveReqLock.RUnlock()
+    return conn
+}
 
 
 func check(obj interface{}) {
@@ -84,7 +157,7 @@ func reply(conn *net.TCPConn, msg *fs.Msg) bool {
     return err == nil
 }
 
-func serve(conn *net.TCPConn) {
+func (ch *ClientHandler) serve(conn *net.TCPConn) {
     reader := bufio.NewReader(conn)
     for {
         msg, msgerr, fatalerr := fs.GetMsg(reader)
@@ -104,26 +177,24 @@ func serve(conn *net.TCPConn) {
         /***
          *      Replicate msg and after receiving at commitChannel, ProcessMsg(msg)
          */
-        nextConnId++
-        connLock.Lock()
-        activeReq[nextConnId] = conn
-        connLock.Unlock()
-        request := Request{ServerId:raft.GetId(), ReqId:nextConnId, msg:msg}
-        raft.Append(request)
+        connId := ch.AddConnection(conn)
+
+        request := Request{ServerId:ch.Raft.GetId(), ReqId:connId, msg:*msg}
+        ch.Raft.Append(request)
     }
 }
 
-func handleCommits() {
+func (ch *ClientHandler) handleCommits() {
     for {
         select {
-        case commitAction, ok := <- raft.CommitChannel :
+        case commitAction, ok := <- ch.Raft.CommitChannel :
             if ok {
                 var response *fs.Msg
                 request := commitAction.Log.Data.(Request)
 
 
-                if commitAction.Err != nil {
-                    response = fs.ProcessMsg(request.msg)
+                if commitAction.Err == nil {
+                    response = fs.ProcessMsg(&request.msg)
                 } else {
                     switch commitAction.Err.(type) {
                     case rsm.Error_Commit:                  // unable to commit, internal error
@@ -131,77 +202,35 @@ func handleCommits() {
                     case rsm.Error_NotLeader:               // not a leader, redirect error
                         errorNotLeader := commitAction.Err.(rsm.Error_NotLeader)
                         response = &fs.Msg{Kind:'R', RedirectAddr:errorNotLeader.LeaderAddr + ":" + strconv.Itoa(errorNotLeader.LeaderPort)}
+                    default:
+                        ch.log_error(3, "Unknown error type : %v", commitAction.Err)
                     }
                 }
 
                 // Reply only if the client has requested this server
-                if request.ServerId == raft.GetId() {
-                    connLock.RLock()
-                    conn := activeReq[request.ReqId]
-                    connLock.RUnlock()
-                    if !reply(conn, response) {
+                if request.ServerId == ch.Raft.GetId() {
+
+                    conn := ch.GetConn(request.ReqId)
+
+                    if !reply(&conn, response) {
                         conn.Close()
                     }
                     // Remove request from active requests
-                    connLock.Lock()
-                    delete(activeReq, request.ReqId)
-                    connLock.Unlock()
+                    ch.RemoveConn(request.ReqId)
                 }
 
                 // update last applied
-                raft.UpdateLastApplied(commitAction.Log.Index)
+                ch.Raft.UpdateLastApplied(commitAction.Log.Index)
             } else {
                 // Raft node closed
+                ch.log_info(3, "Raft node shutdown")
                 return
             }
         }
     }
 }
 
-func serverMain(config *raft_config.Config, restore bool) {
 
-    if restore {
-        raft = raft_node.RestoreServerState(config)
-    } else {
-        raft = raft_node.NewRaftNode(config)
-    }
-
-    raft.Start()
-
-
-    tcpaddr, err := net.ResolveTCPAddr("tcp", "localhost:"+strconv.Itoa(config.ClientPort))
-    check(err)
-    tcp_acceptor, err := net.ListenTCP("tcp", tcpaddr)
-    check(err)
-
-    go handleCommits()
-    for {
-        tcp_conn, err := tcp_acceptor.AcceptTCP()
-        check(err)
-        go serve(tcp_conn)
-    }
-}
-
-func main(config_path string) {
-
-/*
-
-    type Config struct {
-        Id               int    // this node's id. One of the cluster's entries should match.
-        LogDir           string // Log file directory for this node
-        ElectionTimeout  int
-        HeartbeatTimeout int
-        NumOfNodes       int
-        MockServer       *mock.MockServer
-
-                                // Client side config
-        ClientPort      int
-    }
-
-*/
-
-
-
-
-    //serverMain()
+func (ch *ClientHandler) Shutdown() {
+    ch.Raft.Shutdown()
 }
