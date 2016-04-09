@@ -72,11 +72,17 @@ func GetMsg(reader *bufio.Reader) (msg *Msg, msgerr error, fatalerr error) {
 func parseFirst(reader *bufio.Reader, buf []byte) (msg *Msg, msgerr error, fatalerr error) {
 	var err error
 	var msgstr string
-	var fields []string
 	
 	if msgstr, err = fillLine(buf, reader); err != nil { // read until EOL
 		return nil, nil, err
 	}
+
+	return PaserString(msgstr)
+}
+
+func PaserString( msgstr string ) (msg *Msg, msgerr error, fatalerr error)  {
+	var err error
+	var fields []string
 	// validation functions checkN and toInt help avoid repeated use of "if err != nil ". Once
 	// "err" is set, these functions don't do anything.
 	checkN := func(fields []string, min int) {
@@ -109,7 +115,7 @@ func parseFirst(reader *bufio.Reader, buf []byte) (msg *Msg, msgerr error, fatal
 	exptime := 0
 	response := false
 	kind := byte(0)
-    redirect := ""
+	redirect := ""
 
 	fields = strings.Fields(msgstr)
 	switch fields[0] {
@@ -158,11 +164,11 @@ func parseFirst(reader *bufio.Reader, buf []byte) (msg *Msg, msgerr error, fatal
 	case "ERR_INTERNAL":
 		kind = 'I'
 		response = true
-    case "ERR_REDIRECT":    // ERR_REDIRECT <new leader URL>
-        checkN(fields, 2)
-        kind = 'R'
-        redirect = fields[1]
-        response = true
+	case "ERR_REDIRECT":    // ERR_REDIRECT <new leader URL>
+		checkN(fields, 2)
+		kind = 'R'
+		redirect = fields[1]
+		response = true
 	default:
 		fatalerr = fmt.Errorf("Command %s not recognized", fields[0])
 	}

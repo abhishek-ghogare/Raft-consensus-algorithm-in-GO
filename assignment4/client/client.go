@@ -4,11 +4,10 @@ import (
     "fmt"
     "net"
     "bufio"
-    "strings"
     "strconv"
     "errors"
-    "cmd/go/testdata/testinternal3"
     "cs733/assignment4/logging"
+    "cs733/assignment4/filesystem/fs"
 )
 
 
@@ -29,7 +28,7 @@ func (rn *Client) log_warning(skip int, format string, args ...interface{}) {
 
 var errNoConn = errors.New("Connection is closed")
 
-
+/*
 type Msg struct {
                  // Kind = the first character of the command. For errors, it
                  // is the first letter after "ERR_", ('V' for ERR_VERSION, for
@@ -40,7 +39,7 @@ type Msg struct {
     Numbytes int
     Exptime  int // expiry time in seconds
     Version  int
-}
+}*/
 
 type Client struct {
     clientId    int
@@ -59,18 +58,18 @@ func New(serverUrl string, id int) *Client {
     }
 
     if err != nil {
-        client.log_error("Unable to connect to server : %v", err)
+        client.log_error(3, "Unable to connect to server : %v", err.Error())
         return nil
     }
     return &client
 }
 
-func (cl *Client) Read(filename string) (*Msg, error) {
+func (cl *Client) Read(filename string) (*fs.Msg, error) {
     cmd := "read " + filename + "\r\n"
-    return cl.sendRcv(cmd)
+    return cl.SendRcv(cmd)
 }
 
-func (cl *Client) Write(filename string, contents string, exptime int) (*Msg, error) {
+func (cl *Client) Write(filename string, contents string, exptime int) (*fs.Msg, error) {
     var cmd string
     if exptime == 0 {
         cmd = fmt.Sprintf("write %s %d\r\n", filename, len(contents))
@@ -78,10 +77,10 @@ func (cl *Client) Write(filename string, contents string, exptime int) (*Msg, er
         cmd = fmt.Sprintf("write %s %d %d\r\n", filename, len(contents), exptime)
     }
     cmd += contents + "\r\n"
-    return cl.sendRcv(cmd)
+    return cl.SendRcv(cmd)
 }
 
-func (cl *Client) Cas(filename string, version int, contents string, exptime int) (*Msg, error) {
+func (cl *Client) Cas(filename string, version int, contents string, exptime int) (*fs.Msg, error) {
     var cmd string
     if exptime == 0 {
         cmd = fmt.Sprintf("cas %s %d %d\r\n", filename, version, len(contents))
@@ -89,16 +88,16 @@ func (cl *Client) Cas(filename string, version int, contents string, exptime int
         cmd = fmt.Sprintf("cas %s %d %d %d\r\n", filename, version, len(contents), exptime)
     }
     cmd += contents + "\r\n"
-    return cl.sendRcv(cmd)
+    return cl.SendRcv(cmd)
 }
 
-func (cl *Client) Delete(filename string) (*Msg, error) {
+func (cl *Client) Delete(filename string) (*fs.Msg, error) {
     cmd := "delete " + filename + "\r\n"
-    return cl.sendRcv(cmd)
+    return cl.SendRcv(cmd)
 }
 
 
-func (cl *Client) send(str string) error {
+func (cl *Client) Send(str string) error {
     if cl.conn == nil {
         return errNoConn
     }
@@ -111,32 +110,36 @@ func (cl *Client) send(str string) error {
     return err
 }
 
-func (cl *Client) sendRcv(str string) (msg *Msg, err error) {
+func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
     if cl.conn == nil {
         return nil, errNoConn
     }
-    err = cl.send(str)
+    err = cl.Send(str)
     if err == nil {
-        msg, err = cl.rcv()
+        msg, err = cl.Rcv()
     }
     return msg, err
 }
 
-func (cl *Client) close() {
+func (cl *Client) Close() {
     if cl != nil && cl.conn != nil {
         cl.conn.Close()
         cl.conn = nil
     }
 }
 
-func (cl *Client) rcv() (msg *Msg, err error) {
+func (cl *Client) Rcv() (msg *fs.Msg, err error) {
+    var fatalerr error
     // we will assume no errors in server side formatting
     line, err := cl.reader.ReadString('\n')
     if err == nil {
-        msg, err = parseFirst(line)
+        msg, err, fatalerr = fs.PaserString(line)
         if err != nil {
             return nil, err
+        } else if fatalerr !=nil {
+            return nil, fatalerr
         }
+
         if msg.Kind == 'C' {
             contents := make([]byte, msg.Numbytes)
             var c byte
@@ -154,14 +157,15 @@ func (cl *Client) rcv() (msg *Msg, err error) {
         }
     }
     if err != nil {
-        cl.close()
+        cl.Close()
     }
     return msg, err
 }
+/*
 
-func parseFirst(line string) (msg *Msg, err error) {
+func parseFirst(line string) (msg *fs.Msg, err error) {
     fields := strings.Fields(line)
-    msg = &Msg{}
+    msg = &fs.Msg{}
 
     // Utility function fieldNum to int
     toInt := func(fieldNum int) int {
@@ -208,3 +212,4 @@ func parseFirst(line string) (msg *Msg, err error) {
         return msg, nil
     }
 }
+*/
