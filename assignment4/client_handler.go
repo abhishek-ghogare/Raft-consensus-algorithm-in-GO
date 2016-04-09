@@ -12,7 +12,10 @@ import (
     rsm "cs733/assignment4/raft_node/raft_state_machine"
     "cs733/assignment4/raft_config"
     "cs733/assignment4/logging"
+    "time"
 )
+
+const CONNECTION_TIMEOUT = 5 // in seconds
 
 func (rn *ClientHandler) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
@@ -44,7 +47,7 @@ type Request struct {
 
 type ClientHandler struct {
     Raft            *raft_node.RaftNode
-    ActiveReq       map[int]net.TCPConn
+    ActiveReq       map[int]chan rsm.CommitAction
     ActiveReqLock   sync.RWMutex
     NextConnId      int
     ClientPort      int     //Port on which the client handler will listen
@@ -52,7 +55,7 @@ type ClientHandler struct {
 
 func New(config *raft_config.Config, restore bool) (ch *ClientHandler) {
     ch = &ClientHandler{
-        ActiveReq   : make(map[int]net.TCPConn),
+        ActiveReq   : make(map[int]chan rsm.CommitAction),
         NextConnId  : 0,
         ClientPort  : config.ClientPort }
 
@@ -87,11 +90,11 @@ func (ch *ClientHandler) serverMain() {
 
 
 // Add a connection to active request queue and returns request id
-func (ch *ClientHandler) AddConnection (conn *net.TCPConn) int {
+func (ch *ClientHandler) AddConnection (conn chan rsm.CommitAction) int {
     ch.ActiveReqLock.Lock()
     ch.NextConnId++
     connId := ch.NextConnId
-    ch.ActiveReq [ connId ] = *conn
+    ch.ActiveReq [ connId ] = conn
     ch.ActiveReqLock.Unlock()
     return connId
 }
@@ -101,7 +104,7 @@ func (ch *ClientHandler) RemoveConn (connId int) {
     delete(ch.ActiveReq, connId)
     ch.ActiveReqLock.Unlock()
 }
-func (ch *ClientHandler) GetConn (connId int) net.TCPConn {
+func (ch *ClientHandler) GetConn (connId int) chan rsm.CommitAction {
     ch.ActiveReqLock.RLock()
     conn := ch.ActiveReq[connId]
     ch.log_info(4, "Connection extracted from map : id:%v conn:%v", connId, conn)
@@ -177,10 +180,44 @@ func (ch *ClientHandler) serve(conn *net.TCPConn) {
         /***
          *      Replicate msg and after receiving at commitChannel, ProcessMsg(msg)
          */
-        connId := ch.AddConnection(conn)
 
-        request := Request{ServerId:ch.Raft.GetId(), ReqId:connId, msg:*msg}
+        waitChan := make(chan rsm.CommitAction, 0)
+        reqId := ch.AddConnection(waitChan)
+
+        request := Request{ServerId:ch.Raft.GetId(), ReqId:reqId, msg:*msg}
         ch.Raft.Append(request)
+
+        select {
+        case commitAction := <-waitChan:
+            var response *fs.Msg
+
+            request := commitAction.Log.Data.(Request)
+
+            if commitAction.Err == nil {
+                response = fs.ProcessMsg(&request.msg)
+            } else {
+                switch commitAction.Err.(type) {
+                case rsm.Error_Commit:                  // unable to commit, internal error
+                    response = &fs.Msg{Kind:'I'}
+                case rsm.Error_NotLeader:               // not a leader, redirect error
+                    errorNotLeader := commitAction.Err.(rsm.Error_NotLeader)
+                    response = &fs.Msg{Kind:'R', RedirectAddr:errorNotLeader.LeaderAddr + ":" + strconv.Itoa(errorNotLeader.LeaderPort)}
+                default:
+                    ch.log_error(3, "Unknown error type : %v", commitAction.Err)
+                }
+            }
+
+            if !reply(conn, response) {
+                conn.Close()
+            }
+        case  <- time.After(CONNECTION_TIMEOUT*time.Second) :
+            // Connection timed out
+            conn.Close()
+        }
+
+
+        // Remove request from active requests
+        ch.RemoveConn(reqId)
     }
 }
 
@@ -189,34 +226,12 @@ func (ch *ClientHandler) handleCommits() {
         select {
         case commitAction, ok := <- ch.Raft.CommitChannel :
             if ok {
-                var response *fs.Msg
                 request := commitAction.Log.Data.(Request)
-
-
-                if commitAction.Err == nil {
-                    response = fs.ProcessMsg(&request.msg)
-                } else {
-                    switch commitAction.Err.(type) {
-                    case rsm.Error_Commit:                  // unable to commit, internal error
-                        response = &fs.Msg{Kind:'I'}
-                    case rsm.Error_NotLeader:               // not a leader, redirect error
-                        errorNotLeader := commitAction.Err.(rsm.Error_NotLeader)
-                        response = &fs.Msg{Kind:'R', RedirectAddr:errorNotLeader.LeaderAddr + ":" + strconv.Itoa(errorNotLeader.LeaderPort)}
-                    default:
-                        ch.log_error(3, "Unknown error type : %v", commitAction.Err)
-                    }
-                }
 
                 // Reply only if the client has requested this server
                 if request.ServerId == ch.Raft.GetId() {
-
                     conn := ch.GetConn(request.ReqId)
-
-                    if !reply(&conn, response) {
-                        conn.Close()
-                    }
-                    // Remove request from active requests
-                    ch.RemoveConn(request.ReqId)
+                    conn <- commitAction
                 }
 
                 // update last applied
