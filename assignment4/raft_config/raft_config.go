@@ -3,7 +3,7 @@ package raft_config
 import (
     "os"
     "encoding/json"
-    "github.com/cs733-iitb/cluster/mock"
+    "github.com/cs733-iitb/cluster"
 )
 
 type Config struct {
@@ -12,7 +12,8 @@ type Config struct {
     ElectionTimeout  int
     HeartbeatTimeout int
     NumOfNodes       int
-    MockServer       *mock.MockServer
+    ClusterConfig    cluster.Config
+    //MockServer       *mock.MockServer
 
     // Client side config
     ClientPort      int

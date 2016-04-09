@@ -3,6 +3,7 @@ package raft_node
 import (
     rsm "cs733/assignment4/raft_node/raft_state_machine"
     "cs733/assignment4/raft_config"
+    "github.com/cs733-iitb/cluster"
 )
 
 
@@ -11,10 +12,16 @@ func NewRaftNode(config *raft_config.Config) *RaftNode {
 
     (&RaftNode{}).log_info(3, "Opening log file : %v", config.LogDir)
 
+    clusterServer, err := cluster.New(config.Id,config.ClusterConfig)
+    if err!=nil {
+        (&RaftNode{}).log_error(3, "Unable to create cluster server : %v", err.Error())
+    }
+
     server_state := rsm.New(config)
     raft := RaftNode{
         server_state        : server_state,
-        clusterServer       : config.MockServer,
+        clusterServer       : clusterServer,
+        //clusterServer       : config.MockServer,
         eventCh             : make(chan interface{}),
         timeoutCh           : make(chan interface{}),
         CommitChannel       : make(chan rsm.CommitAction, 200),
@@ -31,10 +38,16 @@ func NewRaftNode(config *raft_config.Config) *RaftNode {
 
 func RestoreServerState(config *raft_config.Config) *RaftNode {
 
+    clusterServer, err := cluster.New(config.Id,config.ClusterConfig)
+    if err!=nil {
+        (&RaftNode{}).log_error(3, "Unable to create cluster server : %v", err.Error())
+    }
+
     server_state := rsm.Restore(config)
     raft := RaftNode{
         server_state        : server_state,
-        clusterServer       : config.MockServer,
+        clusterServer       : clusterServer,
+        //clusterServer       : config.MockServer,
         eventCh             : make(chan interface{}),
         timeoutCh           : make(chan interface{}),
         CommitChannel       : make(chan rsm.CommitAction, 200),

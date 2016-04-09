@@ -13,6 +13,7 @@ import (
     "cs733/assignment4/raft_config"
     "cs733/assignment4/logging"
     "time"
+    "encoding/gob"
 )
 
 const CONNECTION_TIMEOUT = 5 // in seconds
@@ -69,6 +70,8 @@ func New(config *raft_config.Config, restore bool) (ch *ClientHandler) {
 }
 
 func (ch *ClientHandler) serverMain() {
+
+    gob.Register(Request{})
 
     ch.Raft.Start()
 

@@ -134,46 +134,6 @@ func TestServerStateRestore2(t *testing.T) {
 }
 
 
-func Test(t *testing.T) {
-    rand.Seed(10)
-    cleanupLogs()
-    rafts := makeRafts() // array of []RaftNode
-
-
-    ldr := rafts.getLeader(t)
-    ldr.Append("foo")
-    rafts.checkSingleCommit(t, "foo")
-
-    ldr = rafts.getLeader(t)
-    mockCluster.Partition([]int{1, 2, 3}, []int{4, 5})
-    time.Sleep(2 * time.Second)
-    mockCluster.Heal()
-    ldr = rafts.getLeader(t)
-    ldr.Append("bar")
-    rafts.checkSingleCommit(t, "bar")
-
-    rafts.shutdownRafts()
-}
-
-func TestNetworkPartition(t *testing.T) {
-    cleanupLogs()
-    rafts := makeRafts() // array of []RaftNode
-
-    ldr := rafts.getLeader(t)
-    ldr.Append("foo")
-    rafts.checkSingleCommit(t, "foo")
-
-    ldr = rafts.getLeader(t)
-    mockCluster.Partition([]int{1, 2, 3}, []int{4, 5})
-    time.Sleep(2 * time.Second)
-    mockCluster.Heal()
-    time.Sleep(2 * time.Second)
-    ldr = rafts.getLeader(t)
-    ldr.Append("bar")
-
-    rafts.shutdownRafts()
-}
-
 func TestBasic(t *testing.T) {
     cleanupLogs()
     rafts := makeRafts()        // array of []RaftNode

@@ -98,7 +98,7 @@ type SendAction struct {
 type CommitAction struct {
     // Removing Index, since it is not used
     //Index int // for error, set to -1
-    Log LogEntry
+    Log LogEntry    // TODO::use data of type interface here and index outside
     Err error
 }
 type Error_Commit struct {}
@@ -223,7 +223,7 @@ func (state *StateMachine)getLogsFrom(index int64) *[]LogEntry {
     logs := []LogEntry{}
 
     for ; index <= state.PersistentLog.GetLastIndex() ; index++ {
-        state.log_info(4, "Fetching %v th log from persistent store", index)
+        //state.log_info(4, "Fetching %v th log from persistent store", index)
         l, e := state.PersistentLog.Get(int64(index))
         if e!=nil {
             state.log_error(4, "Persistent log access error : %v", e.Error())

@@ -14,6 +14,7 @@ import (
     "cs733/assignment4/filesystem/fs"
     "errors"
     "os"
+    "github.com/cs733-iitb/cluster"
 )
 
 var mockCluster *mock.MockCluster
@@ -52,16 +53,26 @@ func TestRPCMain(t *testing.T) {
         ElectionTimeout  : 1000,
         HeartbeatTimeout : 300,
         NumOfNodes       : 5,
-        MockServer       : nil,
+        ClusterConfig    : cluster.Config   {
+                                                Peers: []cluster.PeerConfig{
+                                                    {Id: 1, Address: "localhost:7001"},
+                                                    {Id: 2, Address: "localhost:7002"},
+                                                    {Id: 3, Address: "localhost:7003"},
+                                                    {Id: 4, Address: "localhost:7004"},
+                                                    {Id: 5, Address: "localhost:7005"},
+                                                },
+                                            },
+        //MockServer       : nil,
         ClientPort       : 9000}
 
     for i:=1 ; i<=5 ; i++ {
         config := baseConfig
         config.Id+=i
         config.ClientPort+=i
+        config.ElectionTimeout += 300*(i-1)
         config.LogDir+="raft_"+strconv.Itoa(i)+"/"
         mockCluster.AddServer(i)
-        config.MockServer = mockCluster.Servers[i]
+        //config.MockServer = mockCluster.Servers[i]
 
 
         clientHandlers = append(clientHandlers, New(&config,false))

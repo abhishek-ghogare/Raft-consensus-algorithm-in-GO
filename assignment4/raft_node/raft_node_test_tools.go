@@ -5,11 +5,11 @@ import (
     "time"
     "strconv"
     "os"
-    "github.com/cs733-iitb/cluster/mock"
     rsm "cs733/assignment4/raft_node/raft_state_machine"
     "cs733/assignment4/logging"
     "cs733/assignment4/raft_config"
     "errors"
+    "github.com/cs733-iitb/cluster"
 )
 
 func log_error(skip int, format string, args ...interface{}) {
@@ -24,7 +24,7 @@ func log_warning(skip int, format string, args ...interface{}) {
 
 type Rafts []*RaftNode
 
-var mockCluster *mock.MockCluster
+//var mockCluster *mock.MockCluster
 
 func expect(t *testing.T, found interface{}, expected interface{}, msg string) {
     if found != expected {
@@ -42,12 +42,12 @@ func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 		t.Fatalf("Error reopening config : %v", err.Error())
 	}
 
-    _, err = mockCluster.AddServer(config.Id)
+    //_, err = mockCluster.AddServer(config.Id)
     if err != nil {
         rafts.shutdownRafts()
         t.Fatalf("Unable to re-add server with id : %v : error:%v", config.Id, err.Error())
     }
-	config.MockServer = mockCluster.Servers[config.Id]
+	//config.MockServer = mockCluster.Servers[config.Id]
 	//config.mockServer.Heal()
 	rafts[node_index] = RestoreServerState(config)
 	rafts[node_index].Start()
@@ -57,26 +57,35 @@ func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 
 func makeConfigs() []*raft_config.Config {
     var err error
-    mockCluster, err = mock.NewCluster(nil)
+    //mockCluster, err = mock.NewCluster(nil)
     if err != nil {
         log_error(3, "Error in creating CLUSTER : %v", err.Error())
     }
 
     configBase := raft_config.Config{
-        //NodeNetAddrList 	:nodeNetAddrList,
-        Id                  :1,
-        LogDir              :"log file", // Log file directory for this node
-        ElectionTimeout     :500,
-        HeartbeatTimeout    :100,
-        NumOfNodes          :5}
+        Id                  : 1,
+        LogDir              : "log file", // Log file directory for this node
+        ElectionTimeout     : 500,
+        HeartbeatTimeout    : 100,
+        NumOfNodes          : 5,
+        ClusterConfig       : cluster.Config   {
+                                                    Peers: []cluster.PeerConfig{
+                                                        {Id: 1, Address: "localhost:7001"},
+                                                        {Id: 2, Address: "localhost:7002"},
+                                                        {Id: 3, Address: "localhost:7003"},
+                                                        {Id: 4, Address: "localhost:7004"},
+                                                        {Id: 5, Address: "localhost:7005"},
+                                                    },
+                                                },
+    }
 
     var configs []*raft_config.Config
     for i := 1; i <= 5; i++ {
         config := configBase // Copy config
         config.Id = i
         config.LogDir = "/tmp/raft/node" + strconv.Itoa(i) + "/"
-        mockCluster.AddServer(i)
-        config.MockServer = mockCluster.Servers[i]
+        //mockCluster.AddServer(i)
+        //config.MockServer = mockCluster.Servers[i]
         log_info(3, "Creating Config %v", config.Id)
         configs = append(configs, &config)
     }

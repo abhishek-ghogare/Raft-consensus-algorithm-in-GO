@@ -8,7 +8,6 @@ import (
     "time"
     "sync"
     "strconv"
-    "github.com/cs733-iitb/cluster/mock"
     rsm "cs733/assignment4/raft_node/raft_state_machine"
     "cs733/assignment4/logging"
     "fmt"
@@ -34,9 +33,10 @@ type RaftNode struct {
     timeoutCh       chan interface{}
                            //config          Config
     LogDir          string // Log file directory for this node
-    server_state    *rsm.StateMachine
-    clusterServer   *mock.MockServer
-    timer           *time.Timer
+    server_state   *rsm.StateMachine
+    clusterServer   cluster.Server
+    //clusterServer   *mock.MockServer
+    timer          *time.Timer
 
                            // A channel for client to listen on. What goes into Append must come out of here at some point.
     CommitChannel   chan rsm.CommitAction
@@ -84,9 +84,9 @@ func (rn *RaftNode) processEvents() {
             case rsm.AppendEvent:
                 actions := make([]interface{}, 0)
                 if rn.GetServerState() != rsm.LEADER {
-                    log := ev.(rsm.AppendEvent).Data.(rsm.LogEntry)
+                    //log := ev.(rsm.AppendEvent).Data
                     actions = append(actions, rsm.CommitAction{
-                        Log : log,
+                        Log : rsm.LogEntry{},
                         Err : rsm.Error_NotLeader{
                             LeaderAddr : "127.0.0.1",       // TODO:: temp patch, redo when normal cluster is used
                             LeaderPort : 9000 + (rn.GetId() + 1)%5 } })
@@ -102,7 +102,7 @@ func (rn *RaftNode) processEvents() {
                 actions := []interface{}{stateStoreAction}
                 rn.doActions(actions)
             }
-        case ev = <-(*rn.clusterServer).Inbox():
+        case ev = <- rn.clusterServer.Inbox():
             ev := ev.(*cluster.Envelope)
 
         // Debug logging
@@ -127,7 +127,7 @@ func (rn *RaftNode) processEvents() {
                 close(rn.eventCh)
                 close(rn.timeoutCh)
                 rn.server_state.PersistentLog.Close()
-                (*rn.clusterServer).Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
+                rn.clusterServer.Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
                 rn.server_state = &rsm.StateMachine{}
                 rn.waitShutdown.Done()
                 return
@@ -162,9 +162,9 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             }
 
             if action.ToId == -1 {
-                (*rn.clusterServer).Outbox() <- &cluster.Envelope{Pid:cluster.BROADCAST, Msg:action.Event}
+                rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:cluster.BROADCAST, Msg:action.Event}
             } else {
-                (*rn.clusterServer).Outbox() <- &cluster.Envelope{Pid:action.ToId, Msg:action.Event}
+                rn.clusterServer.Outbox() <- &cluster.Envelope{Pid:action.ToId, Msg:action.Event}
             }
 
         /*
