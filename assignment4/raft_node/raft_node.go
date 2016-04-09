@@ -36,7 +36,6 @@ type RaftNode struct {
     LogDir          string // Log file directory for this node
     server_state    *rsm.StateMachine
     clusterServer   *mock.MockServer
-//    logs            *log.Log
     timer           *time.Timer
 
                            // A channel for client to listen on. What goes into Append must come out of here at some point.
@@ -83,8 +82,18 @@ func (rn *RaftNode) processEvents() {
         case ev = <-rn.eventCh:
             switch ev.(type) {
             case rsm.AppendEvent:
-                rn.log_info(3, "Append request received")
-                actions := rn.server_state.ProcessEvent(ev)
+                actions := make([]interface{}, 0)
+                if rn.GetServerState() != rsm.LEADER {
+                    log := ev.(rsm.AppendEvent).Data.(rsm.LogEntry)
+                    actions = append(actions, rsm.CommitAction{
+                        Log : log,
+                        Err : rsm.Error_NotLeader{
+                            LeaderAddr : "127.0.0.1",       // TODO:: temp patch, redo when normal cluster is used
+                            LeaderPort : 9000 + (rn.GetId() + 1)%5 } })
+                } else {
+                    rn.log_info(3, "Append request received")
+                    actions = rn.server_state.ProcessEvent(ev)
+                }
                 rn.doActions(actions)
             case rsm.UpdateLastAppliedEvent:
                 rn.log_info(3, "Update last applied event received")
