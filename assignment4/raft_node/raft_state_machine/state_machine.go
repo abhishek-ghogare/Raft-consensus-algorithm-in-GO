@@ -531,7 +531,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
             // truncate them up to the end
             //truncatedLogs := server.getLogsFrom(event.PrevLogIndex+1)// logs[event.PrevLogIndex+1:]
             truncatedLogs := state.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1]
-            state.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs: %+v", event.PrevLogIndex, truncatedLogs)
+            state.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs from %v to %v", event.PrevLogIndex, event.PrevLogIndex+1, state.PersistentLog.GetLastIndex())
             for _, log := range *truncatedLogs {
                 action := CommitAction{Log: log, Err: Error_Commit{}}
                 actions = append(actions, action)
@@ -558,9 +558,9 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
             state.commitIndex = commitUpto
 
             // Commit all logs from commitFrom to commitUpto
+            state.log_info(3, "Commiting from index %v to %v", commitFrom, commitUpto)
             for i := commitFrom; i <= commitUpto; i++ {
                 action := CommitAction{Log: *state.GetLogOf(i), Err: nil}
-                state.log_info(3, "Commiting index %v, data:%v", i, state.GetLogOf(i).Data)
                 actions = append(actions, action)
             }
         }
@@ -638,8 +638,8 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             if event.LastLogIndex < state.nextIndex[event.FromId] {
                 state.nextIndex[event.FromId] = event.LastLogIndex + 1
             }
-            if state.nextIndex[event.FromId] > state.PersistentLog.GetLastIndex() {
-                state.log_error(3, "Next index of any node will never be grater than last log index of the leader")
+            if state.nextIndex[event.FromId] > state.PersistentLog.GetLastIndex()+1 {
+                state.log_error(3, "Next index of any node will never be grater than (last log index + 1) of the leader")
             }
 
             // Resend all logs from the holes to the end
@@ -667,7 +667,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             // If there exists an N such that N > commitIndex, a majority
             // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
             // set commitIndex = N
-            state.log_info(3, "Sorted match indices : %v", sorted)
+            //state.log_info(3, "Sorted match indices : %v", sorted)
             for i := state.numberOfNodes / 2; i >= 0; i-- {
                 if sorted[i] > state.commitIndex && state.GetLogOf(sorted[i]).Term == state.CurrentTerm {
                     // Commit all not committed eligible entries
@@ -775,6 +775,7 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
 
         state.PersistentLog.Append(log)                                 // Append to self log
         state.matchIndex[state.server_id] = state.getLastLog().Index    // Update self matchIndex
+
 
         actions = append(actions, state.broadcast(appendReq)...)
     case CANDIDATE:

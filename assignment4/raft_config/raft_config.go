@@ -13,7 +13,6 @@ type Config struct {
     HeartbeatTimeout int
     NumOfNodes       int
     ClusterConfig    cluster.Config
-    //MockServer       *mock.MockServer
 
     // Client side config
     ClientPort      int

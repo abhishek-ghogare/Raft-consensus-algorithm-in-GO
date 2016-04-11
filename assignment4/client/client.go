@@ -12,15 +12,15 @@ import (
 
 
 func (rn *Client) log_error(skip int, format string, args ...interface{}) {
-    format = fmt.Sprintf("[CL:%v] ", strconv.Itoa(rn.clientId)) + format
+    format = fmt.Sprintf("[CL:%3v] ", strconv.Itoa(rn.Id)) + format
     logging.Error(skip, format, args...)
 }
 func (rn *Client) log_info(skip int, format string, args ...interface{}) {
-    format = fmt.Sprintf("[CL:%v] ", strconv.Itoa(rn.clientId)) + format
+    format = fmt.Sprintf("[CL:%3v] ", strconv.Itoa(rn.Id)) + format
     logging.Info(skip, format, args...)
 }
 func (rn *Client) log_warning(skip int, format string, args ...interface{}) {
-    format = fmt.Sprintf("[CL:%v] ", strconv.Itoa(rn.clientId)) + format
+    format = fmt.Sprintf("[CL:%3v] ", strconv.Itoa(rn.Id)) + format
     logging.Warning(skip, format, args...)
 }
 
@@ -28,23 +28,10 @@ func (rn *Client) log_warning(skip int, format string, args ...interface{}) {
 
 var errNoConn = errors.New("Connection is closed")
 
-/*
-type Msg struct {
-                 // Kind = the first character of the command. For errors, it
-                 // is the first letter after "ERR_", ('V' for ERR_VERSION, for
-                 // example), except for "ERR_CMD_ERR", for which the kind is 'M'
-    Kind     byte
-    Filename string
-    Contents []byte
-    Numbytes int
-    Exptime  int // expiry time in seconds
-    Version  int
-}*/
-
 type Client struct {
-    clientId    int
-    conn        *net.TCPConn
-    reader      *bufio.Reader // a bufio Reader wrapper over conn
+    Id     int
+    conn   *net.TCPConn
+    reader *bufio.Reader // a bufio Reader wrapper over conn
 }
 
 func New(serverUrl string, id int) *Client {
@@ -53,7 +40,7 @@ func New(serverUrl string, id int) *Client {
     if err == nil {
         conn, err := net.DialTCP("tcp", nil, raddr)
         if err == nil {
-            client = Client{clientId:id, conn: conn, reader: bufio.NewReader(conn)}
+            client = Client{Id:id, conn: conn, reader: bufio.NewReader(conn)}
         }
     }
 
@@ -98,6 +85,7 @@ func (cl *Client) Delete(filename string) (*fs.Msg, error) {
 
 
 func (cl *Client) Send(str string) error {
+    cl.log_info(6, "Sending : %v", str)
     if cl.conn == nil {
         return errNoConn
     }
@@ -106,11 +94,12 @@ func (cl *Client) Send(str string) error {
         err = fmt.Errorf("Write error in SendRaw: %v", err)
         cl.conn.Close()
         cl.conn = nil
+        cl.log_error(6, "Socket write error : %v", err.Error())
     }
     return err
 }
 
-func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
+func (cl *Client) SendRcvBasic(str string) (msg *fs.Msg, err error) {
     if cl.conn == nil {
         return nil, errNoConn
     }
@@ -121,11 +110,32 @@ func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
     return msg, err
 }
 
-func (cl *Client) Close() {
-    if cl != nil && cl.conn != nil {
-        cl.conn.Close()
-        cl.conn = nil
+func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
+
+    var m *fs.Msg
+
+    for retries := 1 ; retries < 10 ; retries++ {
+        // Check for redirect
+        m, err = cl.SendRcvBasic(str)
+        if err!=nil {
+            cl.log_error(4, "Unable to connect")
+            // TODO:: the server might be down, try different servers
+            return nil, err
+        }
+        if m.Kind == 'R' {
+            cl.log_warning(4, "Server replied with redirect error, redirecting to : %v", msg.RedirectAddr)
+            cl.Close()
+            cl = New(m.RedirectAddr, 1)
+        } else if m.Kind != 'I' {
+            // Error is not of either "not a leader" or "internal error"
+            return m, err
+        } else {
+            cl.log_warning(4, "Server replied with internal error")
+        }
     }
+
+    cl.log_error(4, "Unable to send msg after many retries: %v", m)
+    return m, fmt.Errorf("Unable to send msg after many retries: %v", m)
 }
 
 func (cl *Client) Rcv() (msg *fs.Msg, err error) {
@@ -133,6 +143,7 @@ func (cl *Client) Rcv() (msg *fs.Msg, err error) {
     // we will assume no errors in server side formatting
     line, err := cl.reader.ReadString('\n')
     if err == nil {
+        cl.log_info(6, "Received : %v", line)
         msg, err, fatalerr = fs.PaserString(line)
         if err != nil {
             return nil, err
@@ -157,59 +168,25 @@ func (cl *Client) Rcv() (msg *fs.Msg, err error) {
         }
     }
     if err != nil {
+        cl.log_error(6, "Socket read error : %v", err.Error())
         cl.Close()
     }
     return msg, err
 }
-/*
 
-func parseFirst(line string) (msg *fs.Msg, err error) {
-    fields := strings.Fields(line)
-    msg = &fs.Msg{}
 
-    // Utility function fieldNum to int
-    toInt := func(fieldNum int) int {
-        var i int
-        if err == nil {
-            if fieldNum >=  len(fields) {
-                err = errors.New(fmt.Sprintf("Not enough fields. Expected field #%d in %s\n", fieldNum, line))
-                return 0
-            }
-            i, err = strconv.Atoi(fields[fieldNum])
-        }
-        return i
-    }
-
-    if len(fields) == 0 {
-        return nil, errors.New("Empty line. The previous command is likely at fault")
-    }
-    switch fields[0] {
-    case "OK": // OK [version]
-        msg.Kind = 'O'
-        if len(fields) > 1 {
-            msg.Version = toInt(1)
-        }
-    case "CONTENTS": // CONTENTS <version> <numbytes> <exptime> \r\n
-        msg.Kind = 'C'
-        msg.Version = toInt(1)
-        msg.Numbytes = toInt(2)
-        msg.Exptime = toInt(3)
-    case "ERR_VERSION":
-        msg.Kind = 'V'
-        msg.Version = toInt(1)
-    case "ERR_FILE_NOT_FOUND":
-        msg.Kind = 'F'
-    case "ERR_CMD_ERR":
-        msg.Kind = 'M'
-    case "ERR_INTERNAL":
-        msg.Kind = 'I'
-    default:
-        err = errors.New("Unknown response " + fields[0])
-    }
-    if err != nil {
-        return nil, err
-    } else {
-        return msg, nil
+func (cl *Client) Close() {
+    if cl != nil && cl.conn != nil {
+        cl.log_info(10, "Closing client")
+        cl.log_info(9, "Closing client")
+        cl.log_info(8, "Closing client")
+        cl.log_info(7, "Closing client")
+        cl.log_info(6, "Closing client")
+        cl.log_info(5, "Closing client")
+        cl.log_info(4, "Closing client")
+        cl.log_info(3, "Closing client")
+        cl.log_info(2, "Closing client")
+        cl.conn.Close()
+        cl.conn = nil
     }
 }
-*/

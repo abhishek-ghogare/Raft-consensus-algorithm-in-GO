@@ -80,6 +80,7 @@ func (rn *RaftNode) processEvents() {
             actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
         case ev = <-rn.eventCh:
+        // TODO:: Optimization: club all append requests
             switch ev.(type) {
             case rsm.AppendEvent:
                 actions := make([]interface{}, 0)
@@ -90,14 +91,16 @@ func (rn *RaftNode) processEvents() {
                         Err : rsm.Error_NotLeader{
                             LeaderAddr : "127.0.0.1",       // TODO:: temp patch, redo when normal cluster is used
                             LeaderPort : 9000 + (rn.GetId() + 1)%5 } })
+                    rn.log_warning(3, "Not a leader, redirecting to leader, commitAction : %v", actions[0])
+
                 } else {
-                    rn.log_info(3, "Append request received")
+                    rn.log_info(3, "Append request received") // TODO:: Optimization: club all append requests
                     actions = rn.server_state.ProcessEvent(ev)
                 }
                 rn.doActions(actions)
-            case rsm.UpdateLastAppliedEvent:
-                rn.log_info(3, "Update last applied event received")
+            case rsm.UpdateLastAppliedEvent:  // TODO:: Optimization: club all append requests
                 rn.server_state.LastApplied = ev.(rsm.UpdateLastAppliedEvent).Index
+                rn.log_info(3, "Update last applied event received for index %v", rn.server_state.LastApplied)
                 stateStoreAction := rn.server_state.GetStateStoreAction()
                 actions := []interface{}{stateStoreAction}
                 rn.doActions(actions)
@@ -152,7 +155,16 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
             // Debug logging
             switch action.Event.(type) {
             case rsm.AppendRequestEvent:
-                rn.log_info(3, "%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
+                appendReqE := action.Event.(rsm.AppendRequestEvent)
+                length := len(appendReqE.Entries)
+                var start, end int64
+                if length!=0 {
+                    start = appendReqE.Entries[0].Index
+                    end = appendReqE.Entries[length-1].Index
+                    rn.log_info(3, "%25v %2v -->> %-14v from index %v to %v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, start, end)
+                } else {
+                    rn.log_info(3, "%25v %2v -->> %-14v Heartbeat %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
+                }
             case rsm.AppendRequestRespEvent:
                 rn.log_info(3, "%25v %2v -->> %-14v %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
             case rsm.RequestVoteEvent :
@@ -171,8 +183,8 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
          *  Commit action
          */
         case rsm.CommitAction :
-            rn.log_info(3, "commitAction received %+v", action)
             action := action.(rsm.CommitAction)
+            rn.log_info(3, "commitAction received  for index %v", action.Log.Index)
             rn.CommitChannel <- action
 
         /*
@@ -187,8 +199,8 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
          */
         case rsm.StateStore:
             stateStore := action.(rsm.StateStore)
-            rn.log_info(3, "state store received")
             stateStore.State.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
+            //rn.log_info(3, "state store received")
         default:
             rn.log_error(3, "Unknown action received : %v", action)
         }

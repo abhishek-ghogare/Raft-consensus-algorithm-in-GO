@@ -16,7 +16,7 @@ import (
     "encoding/gob"
 )
 
-const CONNECTION_TIMEOUT = 5 // in seconds
+const CONNECTION_TIMEOUT = 1000000 // in seconds
 
 func (rn *ClientHandler) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
@@ -76,16 +76,18 @@ func (ch *ClientHandler) serverMain() {
     ch.Raft.Start()
 
     tcpaddr, err := net.ResolveTCPAddr("tcp", "localhost:"+strconv.Itoa(ch.ClientPort))
-    check(err)
+    ch.check(err)
     tcp_acceptor, err := net.ListenTCP("tcp", tcpaddr)
-    check(err)
+    ch.check(err)
 
+    ch.log_info(3, "Starting handle commits thread")
     go ch.handleCommits()
 
+    ch.log_info(3, "Starting loop to handle tcp connections")
     go func () {
         for {
             tcp_conn, err := tcp_acceptor.AcceptTCP()
-            check(err)
+            ch.check(err)
             go ch.serve(tcp_conn)
         }
     }()
@@ -116,14 +118,15 @@ func (ch *ClientHandler) GetConn (connId int) chan rsm.CommitAction {
 }
 
 
-func check(obj interface{}) {
+func (ch *ClientHandler) check(obj interface{}) {
     if obj != nil {
+        ch.log_error(3, "Error occurred : %v", obj)
         fmt.Println(obj)
         os.Exit(1)
     }
 }
 
-func reply(conn *net.TCPConn, msg *fs.Msg) bool {
+func (ch *ClientHandler) reply(conn *net.TCPConn, msg *fs.Msg) bool {
     var err error
     write := func(data []byte) {
         if err != nil {
@@ -151,7 +154,7 @@ func reply(conn *net.TCPConn, msg *fs.Msg) bool {
     case 'R': // redirect addr of leader
         resp = fmt.Sprintf("ERR_REDIRECT %v", msg.RedirectAddr)
     default:
-        fmt.Printf("Unknown response kind '%c'", msg.Kind)
+        ch.log_error(3, "Unknown response kind '%c', of msg : %+v", msg.Kind, msg)
         return false
     }
     resp += "\r\n"
@@ -168,23 +171,28 @@ func (ch *ClientHandler) serve(conn *net.TCPConn) {
     for {
         msg, msgerr, fatalerr := fs.GetMsg(reader)
         if fatalerr != nil || msgerr != nil {
-            reply(conn, &fs.Msg{Kind: 'M'})
+            ch.reply(conn, &fs.Msg{Kind: 'M'})
+            if msgerr!=nil {
+                ch.log_error(3, "Error occured while getting a msg from client : %v, %v", msgerr, fatalerr)
+            }
             conn.Close()
             break
         }
 
         if msgerr != nil {
-            if (!reply(conn, &fs.Msg{Kind: 'M'})) {
+            if (!ch.reply(conn, &fs.Msg{Kind: 'M'})) {
+                ch.log_error(3, "Reply to client was not sucessful")
                 conn.Close()
                 break
             }
         }
 
+        ch.log_info(3, "Request received from client : %+v", *msg)
         /***
          *      Replicate msg and after receiving at commitChannel, ProcessMsg(msg)
          */
 
-        waitChan := make(chan rsm.CommitAction, 0)
+        waitChan := make(chan rsm.CommitAction)
         reqId := ch.AddConnection(waitChan)
 
         request := Request{ServerId:ch.Raft.GetId(), ReqId:reqId, msg:*msg}
@@ -210,45 +218,48 @@ func (ch *ClientHandler) serve(conn *net.TCPConn) {
                 }
             }
 
-            if !reply(conn, response) {
+            if !ch.reply(conn, response) {
+                ch.log_error(3, "Reply to client was not sucessful")
                 conn.Close()
             }
         case  <- time.After(CONNECTION_TIMEOUT*time.Second) :
             // Connection timed out
+            ch.log_error(3, "Connection timed out, closing the connection")
             conn.Close()
         }
 
 
         // Remove request from active requests
+        ch.log_info(3, "Removing request from queue with reqId %v", reqId)
         ch.RemoveConn(reqId)
     }
 }
 
 func (ch *ClientHandler) handleCommits() {
     for {
-        select {
-        case commitAction, ok := <- ch.Raft.CommitChannel :
-            if ok {
-                request := commitAction.Log.Data.(Request)
+        commitAction, ok := <- ch.Raft.CommitChannel
+        if ok {
+            request := commitAction.Log.Data.(Request)
 
-                // Reply only if the client has requested this server
-                if request.ServerId == ch.Raft.GetId() {
-                    conn := ch.GetConn(request.ReqId)
-                    conn <- commitAction
-                }
-
-                // update last applied
-                ch.Raft.UpdateLastApplied(commitAction.Log.Index)
-            } else {
-                // Raft node closed
-                ch.log_info(3, "Raft node shutdown")
-                return
+            // Reply only if the client has requested this server
+            if request.ServerId == ch.Raft.GetId() {
+                // TODO:: check if the connection was timed out and the request has been removed from the queue, i.e. map
+                conn := ch.GetConn(request.ReqId)
+                conn <- commitAction
             }
+
+            // update last applied
+            ch.Raft.UpdateLastApplied(commitAction.Log.Index)
+        } else {
+            // Raft node closed
+            ch.log_info(3, "Raft node shutdown")
+            return
         }
     }
 }
 
 
 func (ch *ClientHandler) Shutdown() {
+    ch.log_info(3, "Client handler shuting down")
     ch.Raft.Shutdown()
 }

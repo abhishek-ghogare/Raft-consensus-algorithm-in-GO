@@ -8,7 +8,6 @@ import (
     "sync"
     "strings"
     "cs733/assignment4/raft_config"
-    "github.com/cs733-iitb/cluster/mock"
     "strconv"
     "cs733/assignment4/client"
     "cs733/assignment4/filesystem/fs"
@@ -17,7 +16,7 @@ import (
     "github.com/cs733-iitb/cluster"
 )
 
-var mockCluster *mock.MockCluster
+//var mockCluster *mock.MockCluster
 var clientHandlers []*ClientHandler
 
 func getClientConnToLeader(t *testing.T) *client.Client {
@@ -42,7 +41,6 @@ func TestRPCMain(t *testing.T) {
 
     os.RemoveAll("/opt/raft/")
 
-    mockCluster, err = mock.NewCluster(nil)
     if err!=nil {
         t.Error("Unable to create cluster : ", err.Error())
     }
@@ -69,11 +67,8 @@ func TestRPCMain(t *testing.T) {
         config := baseConfig
         config.Id+=i
         config.ClientPort+=i
-        config.ElectionTimeout += 300*(i-1)
+        config.ElectionTimeout += 100000*(i-1)
         config.LogDir+="raft_"+strconv.Itoa(i)+"/"
-        mockCluster.AddServer(i)
-        //config.MockServer = mockCluster.Servers[i]
-
 
         clientHandlers = append(clientHandlers, New(&config,false))
 
@@ -282,6 +277,7 @@ func TestRPC_ConcurrentWrites(t *testing.T) {
     clients := make([]*client.Client, nclients)
     for i := 0; i < nclients; i++ {
         cl := getClientConnToLeader(t)
+        cl.Id = i
         if cl == nil {
             t.Fatalf("Unable to create client #%d", i)
         }
