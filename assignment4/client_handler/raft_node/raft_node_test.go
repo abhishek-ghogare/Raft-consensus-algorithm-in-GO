@@ -5,8 +5,28 @@ import (
     "time"
     "math/rand"
     "strconv"
+    "encoding/gob"
 )
+ type TestStruct struct {
+     Num int
+     Str string
+     Arr []int
+ }
 
+
+
+func TestBasic1(t *testing.T) {
+    gob.Register(TestStruct{})
+    cleanupLogs()
+    rafts := makeRafts()        // array of []RaftNode
+    log_info(3, "Rafts created")
+    ldr := rafts.getLeader(t)    // Wait until a stable leader is elected
+    ts := TestStruct{Num:1, Str:"hello", Arr:[]int{1,2,3,4,5}}
+    ldr.Append(ts)    // Append to leader
+    ldr = rafts.getLeader(t)    // Again wait for stable leader
+    rafts.checkSingleCommit(t, ts)// Wait until next single append is commited on all nodes
+    rafts.shutdownRafts()
+}
 
 
 func TestServerStateRestore(t *testing.T) {

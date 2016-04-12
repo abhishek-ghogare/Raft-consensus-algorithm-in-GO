@@ -14,8 +14,9 @@ type Config struct {
     NumOfNodes       int
     ClusterConfig    cluster.Config
 
-    // Client side config
+    // Client handler config
     ClientPort      int
+    ServerList      []string // 0th server is null
 }
 
 

@@ -5,7 +5,7 @@ import (
     "time"
     "strconv"
     "os"
-    rsm "cs733/assignment4/raft_node/raft_state_machine"
+    rsm "cs733/assignment4/client_handler/raft_node/raft_state_machine"
     "cs733/assignment4/logging"
     "cs733/assignment4/raft_config"
     "errors"
@@ -203,7 +203,7 @@ func (rafts Rafts) getCurrentLeader(t *testing.T) (*RaftNode) {
     return ldr
 }
 
-func (rafts Rafts) checkSingleCommit(t *testing.T, data string) error{
+func (rafts Rafts) checkSingleCommit(t *testing.T, data interface{}) error{
     // Set 5 sec time span to probe the commit channels
     abortCh := time.NewTimer(5 * time.Second)
 

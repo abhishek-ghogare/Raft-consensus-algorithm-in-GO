@@ -107,11 +107,10 @@ func (err Error_Commit) Error() string {
 }
 type Error_NotLeader struct {
     LeaderAddr string
-    LeaderPort int
 }
 func (err Error_NotLeader) Error() string{
     if err.LeaderAddr != "" {
-        return fmt.Sprintf("This server is not a leader, current leader : %v:%v", err.LeaderAddr, err.LeaderPort)
+        return fmt.Sprintf("This server is not a leader, current leader : %v", err.LeaderAddr)
     } else {
         return "This server is not a leader, current leader is unknown"
     }
@@ -258,6 +257,9 @@ func (state *StateMachine) GetCurrentTerm() int {
 }
 func (state *StateMachine) GetServerId() int {
     return state.server_id
+}
+func (state *StateMachine) GetCurrentLeader() int {
+    return state.currentLdr
 }
 
 // Broadcast an event, returns array of actions

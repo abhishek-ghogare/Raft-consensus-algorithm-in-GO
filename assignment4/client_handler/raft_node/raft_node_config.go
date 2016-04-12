@@ -1,7 +1,7 @@
 package raft_node
 
 import (
-    rsm "cs733/assignment4/raft_node/raft_state_machine"
+    rsm "cs733/assignment4/client_handler/raft_node/raft_state_machine"
     "cs733/assignment4/raft_config"
     "github.com/cs733-iitb/cluster"
 )
@@ -28,7 +28,8 @@ func NewRaftNode(config *raft_config.Config) *RaftNode {
         ShutdownChannel     : make(chan int),
         LogDir              : config.LogDir,
         isUp                : false,
-        isInitialized       : true}
+        isInitialized       : true,
+        serverList          : config.ServerList}
 
     // Storing server state TODO:: Store server state only on valid StateStore action
     raft.server_state.ToServerStateFile(config.LogDir + rsm.RaftStateFile)
@@ -54,7 +55,8 @@ func RestoreServerState(config *raft_config.Config) *RaftNode {
         ShutdownChannel     : make(chan int),
         LogDir              : config.LogDir,
         isUp                : false,
-        isInitialized       : true}
+        isInitialized       : true,
+        serverList          : config.ServerList}
 
     raft.log_info(3, "Raft node restored and initialised")
     return &raft

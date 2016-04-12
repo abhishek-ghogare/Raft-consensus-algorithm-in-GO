@@ -1,4 +1,4 @@
-package main
+package client_handler
 
 import (
     "testing"
@@ -10,7 +10,7 @@ import (
     "cs733/assignment4/raft_config"
     "strconv"
     "cs733/assignment4/client"
-    "cs733/assignment4/filesystem/fs"
+    "cs733/assignment4/client_handler/filesystem/fs"
     "errors"
     "os"
     "github.com/cs733-iitb/cluster"
@@ -61,7 +61,15 @@ func TestRPCMain(t *testing.T) {
                                                 },
                                             },
         //MockServer       : nil,
-        ClientPort       : 9000}
+        ClientPort       : 9000,
+        ServerList       : []string{
+            "",
+            "localhost:9001",
+            "localhost:9002",
+            "localhost:9003",
+            "localhost:9004",
+            "localhost:9005",
+        }}
 
     for i:=1 ; i<=5 ; i++ {
         config := baseConfig
@@ -73,7 +81,7 @@ func TestRPCMain(t *testing.T) {
         clientHandlers = append(clientHandlers, New(&config,false))
 
         // Start client handler
-        clientHandlers[i-1].serverMain()
+        clientHandlers[i-1].Start()
     }
     time.Sleep(3 * time.Second)
 }
@@ -103,7 +111,7 @@ func expect(t *testing.T, response *fs.Msg, expected *fs.Msg, errstr string, err
 }
 
 func TestRPC_BasicSequential(t *testing.T) {
-    cl := getClientConnToLeader(t)
+    cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
     defer cl.Close()
 
     // Read non-existent file cs733net
@@ -152,7 +160,7 @@ func TestRPC_BasicSequential(t *testing.T) {
 }
 
 func TestRPC_Binary(t *testing.T) {
-    cl := getClientConnToLeader(t)
+    cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
     defer cl.Close()
 
     // Write binary contents
@@ -212,7 +220,7 @@ func TestRPC_Batch(t *testing.T) {
 }
 
 func TestRPC_BasicTimer(t *testing.T) {
-    cl := getClientConnToLeader(t)
+    cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
     defer cl.Close()
 
     // Write file cs733, with expiry time of 2 seconds
@@ -276,7 +284,7 @@ func TestRPC_ConcurrentWrites(t *testing.T) {
     niters := 10
     clients := make([]*client.Client, nclients)
     for i := 0; i < nclients; i++ {
-        cl := getClientConnToLeader(t)
+        cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
         cl.Id = i
         if cl == nil {
             t.Fatalf("Unable to create client #%d", i)
@@ -336,7 +344,7 @@ func TestRPC_ConcurrentCas(t *testing.T) {
 
     clients := make([]*client.Client, nclients)
     for i := 0; i < nclients; i++ {
-        cl := getClientConnToLeader(t)
+        cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
         if cl == nil {
             t.Fatalf("Unable to create client #%d", i)
         }

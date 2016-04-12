@@ -7,7 +7,7 @@ import (
     "strconv"
     "errors"
     "cs733/assignment4/logging"
-    "cs733/assignment4/filesystem/fs"
+    "cs733/assignment4/client_handler/filesystem/fs"
 )
 
 

@@ -8,7 +8,7 @@ import (
     "time"
     "sync"
     "strconv"
-    rsm "cs733/assignment4/raft_node/raft_state_machine"
+    rsm "cs733/assignment4/client_handler/raft_node/raft_state_machine"
     "cs733/assignment4/logging"
     "fmt"
 )
@@ -46,6 +46,7 @@ type RaftNode struct {
 
                            // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
     waitShutdown    sync.WaitGroup
+    serverList      []string    // List of addrs of other raft nodes, 0th addr is null
 }
 
 
@@ -87,10 +88,9 @@ func (rn *RaftNode) processEvents() {
                 if rn.GetServerState() != rsm.LEADER {
                     //log := ev.(rsm.AppendEvent).Data
                     actions = append(actions, rsm.CommitAction{
-                        Log : rsm.LogEntry{},
-                        Err : rsm.Error_NotLeader{
-                            LeaderAddr : "127.0.0.1",       // TODO:: temp patch, redo when normal cluster is used
-                            LeaderPort : 9000 + (rn.GetId() + 1)%5 } })
+                                                                Log : rsm.LogEntry{},
+                                                                Err : rsm.Error_NotLeader{
+                                                                    LeaderAddr : rn.serverList[rn.server_state.GetCurrentLeader()] } })
                     rn.log_warning(3, "Not a leader, redirecting to leader, commitAction : %v", actions[0])
 
                 } else {
