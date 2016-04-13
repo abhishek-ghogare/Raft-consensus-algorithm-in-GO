@@ -1,7 +1,6 @@
 package raft_node
 
 import (
-    "encoding/gob"
     "github.com/cs733-iitb/cluster"
     "math/rand"
     "reflect"
@@ -71,7 +70,6 @@ func (rn *RaftNode) processEvents() {
         return
     }
 
-    RegisterEncoding()
     rn.timer = time.NewTimer(time.Duration(rn.server_state.ElectionTimeout + rand.Intn(rsm.RandomTimeout)) * time.Millisecond)
     rn.isUp = true
     for {
@@ -206,7 +204,7 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
         }
     }
 }
-
+/*
 func RegisterEncoding() {
     gob.Register(rsm.AppendRequestEvent{})
     gob.Register(rsm.AppendRequestRespEvent{})
@@ -215,7 +213,7 @@ func RegisterEncoding() {
     //gob.Register(timeoutEvent{})
     gob.Register(rsm.AppendEvent{})
     gob.Register(rsm.LogEntry{})
-}
+}*/
 
 func (rn *RaftNode) Start() {
     rn.log_info(4, "Starting raft node")
@@ -248,7 +246,7 @@ func (rn *RaftNode) GetId() int {
 
 func (rn *RaftNode) GetLogAt(index int64) rsm.LogEntry { // TODO:: return nil on error
     if ! rn.IsNodeInitialized() {
-        log_warning(4, "Node not initialized")
+        logging.Warning(3, "Node not initialized")
         return rsm.LogEntry{};
     }
 
@@ -259,7 +257,7 @@ func (rn *RaftNode) GetCurrentTerm() int {
     if rn.IsNodeInitialized() {
         return rn.server_state.GetCurrentTerm()
     } else {
-        log_warning(4, "Node not initialized")
+        logging.Warning(3, "Node not initialized")
         return 0
     }
 }
@@ -268,7 +266,7 @@ func (rn *RaftNode) GetServerState() rsm.RaftState {
     if rn.IsNodeInitialized() {
         return rn.server_state.GetServerState()
     } else {
-        log_warning(4, "Node not initialized")
+        logging.Warning(3, "Node not initialized")
         return 0
     }
 }

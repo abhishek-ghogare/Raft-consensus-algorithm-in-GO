@@ -5,6 +5,7 @@ import (
     "encoding/json"
     "github.com/cs733-iitb/log"
     "cs733/assignment4/raft_config"
+    "fmt"
 )
 
 func fromServerStateFile(serverStateFile string) (serState *StateMachine, err error) {
@@ -47,7 +48,6 @@ func (state *StateMachine) ToServerStateFile(serverStateFile string) (err error)
  */
 func New(config *raft_config.Config) (server *StateMachine) {
 
-
     server = &StateMachine{
         server_id       : config.Id,
         CurrentTerm     : 0,
@@ -70,7 +70,10 @@ func New(config *raft_config.Config) (server *StateMachine) {
         server.log_error(3, "Unable to open log file : %v\n", err)
         return nil
     }
+
     lg.SetCacheSize(1000000)    // TODO:: out of cache logs are not accessible
+    lg.RegisterSampleEntry(LogEntry{})      //  Problem might be this
+
     server.PersistentLog = lg
     server.PersistentLog.Append(LogEntry{Index:0, Term:0, Data:"Dummy Entry"})
 
@@ -91,8 +94,8 @@ func Restore(config *raft_config.Config) (state *StateMachine) {
     // Restore from file
     restored_state, err := fromServerStateFile(config.LogDir + RaftStateFile)
     if err != nil {
-        restored_state.log_error(3, "Unable to restore server state : %v", err.Error())
-        return nil
+        fmt.Printf("Unable to restore server state : %v\n", err.Error())
+        os.Exit(2)
     }
 
     // Copy persistent state variables to newly initialized state

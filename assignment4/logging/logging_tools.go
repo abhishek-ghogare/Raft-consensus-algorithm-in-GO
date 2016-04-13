@@ -38,7 +38,8 @@ func SetLogLevel(mask LogLevel) {
     logLevel = mask
 }
 
-var logger *log.Logger = log.New(os.Stdout, "", log.Ldate | log.Lmicroseconds)
+
+var Logger *log.Logger = log.New(os.Stdout, "", log.Ldate | log.Lmicroseconds )
 
 // The argument skip is the number of stack frames
 // to ascend, with 0 identifying the caller of Caller.  (For historical reasons the
@@ -55,7 +56,8 @@ func logMsg(skip int, logType LogLevel, format string, args ...interface{}) {
         funcName = arr[len(arr) - 1]
 
         format = fmt.Sprintf("%25v:%-3v : %-25v : ", fileName, line, funcName) + format
-        log.Printf(format, args...)
+        Logger.Printf(format, args...)
+        //log.Printf(format, args...)
     }
 }
 

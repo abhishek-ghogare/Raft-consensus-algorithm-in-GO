@@ -4,13 +4,18 @@ import (
     rsm "cs733/assignment4/client_handler/raft_node/raft_state_machine"
     "cs733/assignment4/raft_config"
     "github.com/cs733-iitb/cluster"
+    "os"
+    "cs733/assignment4/logging"
 )
 
 
 // Returns a Node object
 func NewRaftNode(config *raft_config.Config) *RaftNode {
+    // Remove all persistent store
+    os.RemoveAll(config.LogDir)
 
-    (&RaftNode{}).log_info(3, "Opening log file : %v", config.LogDir)
+
+    logging.Info(2, "Opening log file : %v", config.LogDir)
 
     clusterServer, err := cluster.New(config.Id,config.ClusterConfig)
     if err!=nil {

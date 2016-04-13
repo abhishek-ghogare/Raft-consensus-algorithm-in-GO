@@ -48,9 +48,21 @@ type ClientHandler struct {
     ActiveReqLock   sync.RWMutex
     NextConnId      int
     ClientPort      int     //Port on which the client handler will listen
+    WaitOnServer    sync.WaitGroup
 }
 
 func New(config *raft_config.Config, restore bool) (ch *ClientHandler) {
+
+    gob.Register(fs.Msg{})
+    gob.Register(Request{})
+    gob.Register(rsm.AppendRequestEvent{})
+    gob.Register(rsm.AppendRequestRespEvent{})
+    gob.Register(rsm.RequestVoteEvent{})
+    gob.Register(rsm.RequestVoteRespEvent{})
+    //gob.Register(timeoutEvent{})
+    gob.Register(rsm.AppendEvent{})
+    gob.Register(rsm.LogEntry{})
+
     ch = &ClientHandler{
         ActiveReq   : make(map[int]chan fs.Msg),
         NextConnId  : 0,
@@ -66,9 +78,6 @@ func New(config *raft_config.Config, restore bool) (ch *ClientHandler) {
 }
 
 func (ch *ClientHandler) Start() {
-
-    gob.Register(fs.Msg{})
-    gob.Register(Request{})
 
     ch.Raft.Start()
 
@@ -87,9 +96,16 @@ func (ch *ClientHandler) Start() {
             ch.check(err)
             go ch.serve(tcp_conn)
         }
+        ch.WaitOnServer.Done()
     }()
 }
 
+func (ch *ClientHandler) StartSync() {
+    // Done will becalledtwice, once in handleCommits and once in Start
+    ch.WaitOnServer.Add(2)
+    ch.Start()
+    ch.WaitOnServer.Wait()
+}
 
 // Add a connection to active request queue and returns request id
 func (ch *ClientHandler) CreateRequest() (reqId int, waitChan chan fs.Msg) {
@@ -227,7 +243,7 @@ func (ch *ClientHandler) handleCommits() {
             if commitAction.Err == nil {
                 // Apply request to state machine, i.e. Filesystem
                 ch.log_info(3, "Applying request to file system : %+v", request)
-                response = fs.ProcessMsg(&request.Message)
+                response = fs.ProcessMsg(&request.Message)          // TODO, this is global file system,
             } else {
                 switch commitAction.Err.(type) {
                 case rsm.Error_Commit:                  // unable to commit, internal error
@@ -250,6 +266,7 @@ func (ch *ClientHandler) handleCommits() {
         } else {
             // Raft node closed
             ch.log_info(3, "Raft node shutdown, exiting handleCommits")
+            ch.WaitOnServer.Done()
             return
         }
     }
