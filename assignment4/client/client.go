@@ -38,7 +38,9 @@ func New(serverUrl string, id int) *Client {
     var client Client
     raddr, err := net.ResolveTCPAddr("tcp", serverUrl)
     if err == nil {
-        conn, err := net.DialTCP("tcp", nil, raddr)
+        var conn *net.TCPConn
+        logging.Logger.Printf("Creating tcp connection to %v\n", serverUrl)
+        conn, err = net.DialTCP("tcp", nil, raddr)
         if err == nil {
             client = Client{Id:id, conn: conn, reader: bufio.NewReader(conn)}
         }
@@ -118,7 +120,7 @@ func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
         // Check for redirect
         m, err = cl.SendRcvBasic(str)
         if err!=nil {
-            cl.log_error(4, "Unable to connect")
+            cl.log_error(4, "Unable to connect : %v", err.Error())
             // TODO:: the server might be down, try different servers
             return nil, err
         }

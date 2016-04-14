@@ -527,8 +527,8 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
             // There are entries from last leaders
             // truncate them up to the end
             //truncatedLogs := server.getLogsFrom(event.PrevLogIndex+1)// logs[event.PrevLogIndex+1:]
-            truncatedLogs := state.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1]
             state.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs from %v to %v", event.PrevLogIndex, event.PrevLogIndex+1, state.PersistentLog.GetLastIndex())
+            truncatedLogs := state.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1]
             for _, log := range *truncatedLogs {
                 action := CommitAction{Log: log, Err: Error_Commit{}}
                 actions = append(actions, action)

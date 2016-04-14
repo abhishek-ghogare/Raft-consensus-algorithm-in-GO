@@ -55,7 +55,7 @@ func logMsg(skip int, logType LogLevel, format string, args ...interface{}) {
         arr = strings.Split(funcName, ".")
         funcName = arr[len(arr) - 1]
 
-        format = fmt.Sprintf("%25v:%-3v : %-25v : ", fileName, line, funcName) + format
+        format = format + fmt.Sprintf(" |%25v:%-3v : %v", fileName, line, funcName)
         Logger.Printf(format, args...)
         //log.Printf(format, args...)
     }

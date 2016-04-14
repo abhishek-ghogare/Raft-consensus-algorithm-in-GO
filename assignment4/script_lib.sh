@@ -13,7 +13,6 @@ function execute {
 function executeOnAll {
 	for i in `seq 38 42`
 	do
-		echo "executing on nsl-$i cmd:$1"
 		execute "$1" "nsl-$i"
 	done
 }
@@ -21,7 +20,10 @@ function executeOnAll {
 # Start raft_main process
 # startServer <host>
 function startServer {
-	sshpass -p $pass ssh $username@$1 'cd ~/raft ; nohup ./raft_main -clean_start &' &
+	sshpass -p $pass ssh $username@$1 'cd ~/raft ; exec 2>>debug.log 1>>debug.log ; nohup ./raft_main -clean_start 2>&1 &' &
+}
+function resumeServer {
+	sshpass -p $pass ssh $username@$1 'cd ~/raft ; nohup ./raft_main 2>&1 &' &
 }
 
 # Stops raft_main process
@@ -39,6 +41,15 @@ function startAll {
 	done
 }
 
+function resumeAll {
+	for i in `seq 38 42`
+	do
+		echo "resuming nsl-$i"
+		resumeServer "nsl-$i"
+	done
+}
+
+
 
 
 
@@ -49,14 +60,26 @@ case "$1" in
 	stop)
 		stopServer $2
 		;;
+	resume)
+		resumeServer $2
+		;;
 	startAll)
 		startAll
 		;;
 	stopAll)
 		executeOnAll 'killall raft_main'
 		;;
+	resumeAll)
+		resumeAll
+		;;
+	clearAll)
+		executeOnAll "rm -rf raft"
+		;;
+	-3All)
+		executeOnAll 'killall raft_main -3'
+		;;
 	*)
 		echo "Unknown command"
-		echo "$0 [start|stop] <host>"
+		echo "$0 [start|stop|resume|startAll|stopAll|resumeAll|clearAll|-3All] <host>"
 		;;
 esac

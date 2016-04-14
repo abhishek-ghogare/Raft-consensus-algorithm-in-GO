@@ -98,7 +98,7 @@ func (rn *RaftNode) processEvents() {
                 rn.doActions(actions)
             case rsm.UpdateLastAppliedEvent:  // TODO:: Optimization: club all append requests
                 rn.server_state.LastApplied = ev.(rsm.UpdateLastAppliedEvent).Index
-                rn.log_info(3, "Update last applied event received for index %v", rn.server_state.LastApplied)
+                rn.log_info(3, "Update lastApplied to %v", rn.server_state.LastApplied)
                 stateStoreAction := rn.server_state.GetStateStoreAction()
                 actions := []interface{}{stateStoreAction}
                 rn.doActions(actions)

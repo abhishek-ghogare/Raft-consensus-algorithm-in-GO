@@ -81,7 +81,7 @@ func (ch *ClientHandler) Start() {
 
     ch.Raft.Start()
 
-    tcpaddr, err := net.ResolveTCPAddr("tcp", "localhost:"+strconv.Itoa(ch.ClientPort))
+    tcpaddr, err := net.ResolveTCPAddr("tcp", ":"+strconv.Itoa(ch.ClientPort))
     ch.check(err)
     tcp_acceptor, err := net.ListenTCP("tcp", tcpaddr)
     ch.check(err)
