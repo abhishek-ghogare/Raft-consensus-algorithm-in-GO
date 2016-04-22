@@ -19,7 +19,7 @@ func main() {
     flag.Parse()
 
     if *serverId==-1 {
-        fmt.Errorf("Error : Please provide server id\n")
+        fmt.Printf("Error : Please provide server id\n")
         flag.Usage()
         os.Exit(1)
     }

@@ -79,6 +79,38 @@ func (rn *RaftNode) processEvents() {
         case ev = <-rn.timer.C:
             actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
+
+        /*
+         *  Cluster msg received
+         */
+        case ev = <- rn.clusterServer.Inbox():
+            ev := ev.(*cluster.Envelope)
+
+            // Debug logging
+            switch ev.Msg.(type) {
+            case rsm.AppendRequestEvent:
+                appendEvent := ev.Msg.(rsm.AppendRequestEvent)
+                if len(appendEvent.Entries) != 0 {
+                    // If not heartbeat
+                    fromIndex := appendEvent.PrevLogIndex+1
+                    lastIndex := fromIndex + (int64)(len(appendEvent.Entries)-1)
+                    rn.log_info(3, "%25v %2v <<-- %-14v from:%v to:%v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, fromIndex, lastIndex)
+                }
+            case rsm.AppendRequestRespEvent:
+                rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
+            case rsm.RequestVoteEvent :
+            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+            case rsm.RequestVoteRespEvent :
+            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+            }
+
+            event := ev.Msg.(interface{})
+            actions := rn.server_state.ProcessEvent(event)
+            rn.doActions(actions)
+
+        /*
+         *  Event received on eventCh
+         */
         case ev = <-rn.eventCh:
 
             // Get batch of max 500 requests
@@ -97,14 +129,14 @@ func (rn *RaftNode) processEvents() {
                     }
                 }
 
-                if count>500 {
+                if count>200 {
                     break
                 }
 
                 // Fetch next event if available, or break
                 select {
                 case ev = <- rn.eventCh:
-                    rn.log_info(3, "Fetching another event, append events : %v", len(appendEvents))
+                    //rn.log_info(3, "Fetching another event, append events : %v", len(appendEvents))
                 default:
                     rn.log_info(3, "All events fetched : %v", len(appendEvents))
                     break RequestFetcherLoop
@@ -125,24 +157,10 @@ func (rn *RaftNode) processEvents() {
             }
 
             rn.doActions(actions)
-        case ev = <- rn.clusterServer.Inbox():
-            ev := ev.(*cluster.Envelope)
 
-        // Debug logging
-            switch ev.Msg.(type) {
-            case rsm.AppendRequestEvent:
-                //rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
-            case rsm.AppendRequestRespEvent:
-                //rn.log_info("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
-            case rsm.RequestVoteEvent :
-            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
-            case rsm.RequestVoteRespEvent :
-            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
-            }
-
-            event := ev.Msg.(interface{})
-            actions := rn.server_state.ProcessEvent(event)
-            rn.doActions(actions)
+        /*
+         *  Shutdown event
+         */
         case _, ok := <-rn.ShutdownChannel:
             if !ok {
                 // If channel closed, return from function
@@ -204,7 +222,7 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
          */
         case rsm.CommitAction :
             action := action.(rsm.CommitAction)
-            rn.log_info(3, "commitAction received  for index %v", action.Log.Index)
+            //rn.log_info(3, "commitAction received  for index %v", action.Log.Index)
             rn.CommitChannel <- action
 
         /*

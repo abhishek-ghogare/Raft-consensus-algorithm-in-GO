@@ -768,6 +768,9 @@ func (state *StateMachine) appendClientRequest(event *[]AppendEvent) (actions []
 
     switch state.myState {
     case LEADER:
+        prevLogIndex := state.getLastLog().Index
+        prevLogTerm  := state.getLastLog().Term
+
         logs := []LogEntry{}
         for _, ev := range *event {
             log := LogEntry{Index: state.getLastLog().Index + 1, Term: state.CurrentTerm, Data: ev.Data}
@@ -778,8 +781,8 @@ func (state *StateMachine) appendClientRequest(event *[]AppendEvent) (actions []
         appendReq := AppendRequestEvent{
             FromId:       state.server_id,
             Term:         state.CurrentTerm,
-            PrevLogIndex: state.getLastLog().Index,
-            PrevLogTerm:  state.getLastLog().Term,
+            PrevLogIndex: prevLogIndex,
+            PrevLogTerm:  prevLogTerm,
             Entries:      logs,
             LeaderCommit: state.commitIndex}
                                // Append to self log

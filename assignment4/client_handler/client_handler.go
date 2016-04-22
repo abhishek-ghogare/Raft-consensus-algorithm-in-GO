@@ -16,18 +16,18 @@ import (
     "encoding/gob"
 )
 
-const CONNECTION_TIMEOUT = 5 // in seconds
+const CONNECTION_TIMEOUT = 10 // in seconds
 
-func (rn *ClientHandler) log_error(skip int, format string, args ...interface{}) {
-    format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
+func (chdlr *ClientHandler) log_error(skip int, format string, args ...interface{}) {
+    format = fmt.Sprintf("[CH:%v] ", chdlr.Raft.GetId()) + format
     logging.Error(skip, format, args...)
 }
-func (rn *ClientHandler) log_info(skip int, format string, args ...interface{}) {
-    format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
+func (chdlr *ClientHandler) log_info(skip int, format string, args ...interface{}) {
+    format = fmt.Sprintf("[CH:%v] ", chdlr.Raft.GetId()) + format
     logging.Info(skip, format, args...)
 }
-func (rn *ClientHandler) log_warning(skip int, format string, args ...interface{}) {
-    format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
+func (chdlr *ClientHandler) log_warning(skip int, format string, args ...interface{}) {
+    format = fmt.Sprintf("[CH:%v] ", chdlr.Raft.GetId()) + format
     logging.Warning(skip, format, args...)
 }
 
@@ -43,12 +43,13 @@ type Request struct {
 }
 
 type ClientHandler struct {
-    Raft            *raft_node.RaftNode
-    ActiveReq       map[int]chan fs.Msg
-    ActiveReqLock   sync.RWMutex
-    NextConnId      int
-    ClientPort      int     //Port on which the client handler will listen
-    WaitOnServer    sync.WaitGroup
+    Raft             *raft_node.RaftNode
+    ActiveReq        map[int]chan fs.Msg
+    ActiveReqLock    sync.RWMutex
+    NextConnId       int
+    ClientPort       int     //Port on which the client handler will listen
+    WaitOnServerExit sync.WaitGroup
+    MaxConcurrentClients chan int
 }
 
 func New(Id int, config *raft_config.Config, restore bool) (ch *ClientHandler) {
@@ -78,6 +79,12 @@ func New(Id int, config *raft_config.Config, restore bool) (ch *ClientHandler) {
 }
 
 func (ch *ClientHandler) Start() {
+    // Done will be called twice, once in handleCommits and once in Start
+    ch.WaitOnServerExit.Add(2)
+    ch.MaxConcurrentClients = make(chan int, 200)
+    for i:=1; i<200 ; i++ {
+        ch.MaxConcurrentClients<-0
+    }
 
     ch.Raft.Start()
 
@@ -92,23 +99,24 @@ func (ch *ClientHandler) Start() {
     ch.log_info(3, "Starting loop to handle tcp connections")
     go func () {
         for {
+            // TODO:: how are we exiting from this?
             tcp_conn, err := tcp_acceptor.AcceptTCP()
             ch.check(err)
+
+            <-ch.MaxConcurrentClients // Wait on client ticket
             go ch.serve(tcp_conn)
         }
-        ch.WaitOnServer.Done()
+        ch.WaitOnServerExit.Done()
     }()
 }
 
 func (ch *ClientHandler) StartSync() {
-    // Done will becalledtwice, once in handleCommits and once in Start
-    ch.WaitOnServer.Add(2)
     ch.Start()
-    ch.WaitOnServer.Wait()
+    ch.WaitOnServerExit.Wait()
 }
 
 // Add a connection to active request queue and returns request id
-func (ch *ClientHandler) CreateRequest() (reqId int, waitChan chan fs.Msg) {
+func (ch *ClientHandler) RegisterRequest() (reqId int, waitChan chan fs.Msg) {
     waitChan = make(chan fs.Msg)
     ch.ActiveReqLock.Lock()
     ch.NextConnId++
@@ -118,7 +126,7 @@ func (ch *ClientHandler) CreateRequest() (reqId int, waitChan chan fs.Msg) {
     return connId, waitChan
 }
 // Remove request from active requests
-func (ch *ClientHandler) DequeueRequest(connId int) {
+func (ch *ClientHandler) DeregisterRequest(connId int) {
     ch.ActiveReqLock.Lock()
     close(ch.ActiveReq[connId])
     delete(ch.ActiveReq, connId)
@@ -185,6 +193,8 @@ func (ch *ClientHandler) reply(conn *net.TCPConn, msg *fs.Msg) bool {
 }
 
 func (ch *ClientHandler) serve(conn *net.TCPConn) {
+    defer func() { ch.MaxConcurrentClients<-0 }()    // Give next client the ticket
+
     reader := bufio.NewReader(conn)
     for {
         msg, msgerr, fatalerr := fs.GetMsg(reader)
@@ -193,15 +203,16 @@ func (ch *ClientHandler) serve(conn *net.TCPConn) {
                 ch.log_error(3, "Reply to client was not sucessful : %v, %v", msgerr, fatalerr)
             }
             conn.Close()
-            break
+            return
         }
 
-        ch.log_info(3, "Request received from client : %+v", *msg)
+        //ch.log_info(3, "Request received from client : %+v", *msg)
         /***
          *      Replicate msg and after receiving at commitChannel, ProcessMsg(msg)
          */
 
-        reqId, waitChan := ch.CreateRequest()
+        reqId, waitChan := ch.RegisterRequest()
+        defer ch.DeregisterRequest(reqId)
 
         request := Request{ServerId:ch.Raft.GetId(), ReqId:reqId, Message:*msg}
         // Send request to replicate
@@ -215,24 +226,21 @@ func (ch *ClientHandler) serve(conn *net.TCPConn) {
             if !ch.reply(conn, &response) {
                 ch.log_error(3, "Reply to client was not sucessful")
                 conn.Close()
+                return
             }
         case  <- time.After(CONNECTION_TIMEOUT*time.Second) :
             // Connection timed out
             ch.log_error(3, "Connection timed out, closing the connection")
             ch.reply(conn, &fs.Msg{Kind:'I'})
             conn.Close()
+            return
         }
-
-
-        // Remove request from active requests
-        ch.log_info(3, "Removing request from queue with reqId %v", reqId)
-        ch.DequeueRequest(reqId)
     }
 }
 
-func (ch *ClientHandler) handleCommits() {
+func (chdlr *ClientHandler) handleCommits() {
     for {
-        commitAction, ok := <- ch.Raft.CommitChannel
+        commitAction, ok := <- chdlr.Raft.CommitChannel
         if ok {
             var response *fs.Msg
 
@@ -241,7 +249,7 @@ func (ch *ClientHandler) handleCommits() {
             // Check if replication was successful
             if commitAction.Err == nil {
                 // Apply request to state machine, i.e. Filesystem
-                ch.log_info(3, "Applying request to file system : %+v", request)
+                chdlr.log_info(3, "Applying request to file system : %+v", request)
                 response = fs.ProcessMsg(&request.Message)          // TODO, this is global file system,
             } else {
                 switch commitAction.Err.(type) {
@@ -251,23 +259,23 @@ func (ch *ClientHandler) handleCommits() {
                     errorNotLeader := commitAction.Err.(rsm.Error_NotLeader)
                     response = &fs.Msg {
                                             Kind            : 'R',
-                                            RedirectAddr    : ch.Raft.ServerList[ errorNotLeader.LeaderId ] }
+                                            RedirectAddr    : chdlr.Raft.ServerList[ errorNotLeader.LeaderId ] }
                 default:
-                    ch.log_error(3, "Unknown error type : %v", commitAction.Err)
+                    chdlr.log_error(3, "Unknown error type : %v", commitAction.Err)
                 }
             }
 
             // update last applied
-            ch.Raft.UpdateLastApplied(commitAction.Log.Index)
+            chdlr.Raft.UpdateLastApplied(commitAction.Log.Index)
 
             // Reply only if the client has requested this server
-            if request.ServerId == ch.Raft.GetId() {
-                ch.SendToWaitCh(request.ReqId, *response)
+            if request.ServerId == chdlr.Raft.GetId() {
+                chdlr.SendToWaitCh(request.ReqId, *response)
             }
         } else {
             // Raft node closed
-            ch.log_info(3, "Raft node shutdown, exiting handleCommits")
-            ch.WaitOnServer.Done()
+            chdlr.log_info(3, "Raft node shutdown, exiting handleCommits")
+            chdlr.WaitOnServerExit.Done()
             return
         }
     }

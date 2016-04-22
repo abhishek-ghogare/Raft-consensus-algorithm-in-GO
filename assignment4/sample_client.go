@@ -21,15 +21,7 @@ func main() {
         os.Exit(2)
     }
 
-    var cl *client.Client
-    for _, server := range config.ServerList[1:] {
-        fmt.Println("Connecting to server:", server)
-        cl = client.New(server, 1)
-        if cl != nil {
-            fmt.Printf("Connected : %+v\n", cl)
-            break
-        }
-    }
+    cl := client.New(config, 1)
 
     if cl == nil {
         fmt.Println("Unable to connect to raft servers")

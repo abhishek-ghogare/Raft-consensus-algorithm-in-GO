@@ -8,6 +8,7 @@ import (
     "errors"
     "cs733/assignment4/logging"
     "cs733/assignment4/client_handler/filesystem/fs"
+    "cs733/assignment4/raft_config"
 )
 
 
@@ -29,28 +30,43 @@ func (rn *Client) log_warning(skip int, format string, args ...interface{}) {
 var errNoConn = errors.New("Connection is closed")
 
 type Client struct {
-    Id     int
-    conn   *net.TCPConn
-    reader *bufio.Reader // a bufio Reader wrapper over conn
+    Id               int
+    conn             *net.TCPConn
+    reader           *bufio.Reader // a bufio Reader wrapper over conn
+    ServerList       []string // 0th server is null
+    // TODO:: add mutex here, testcases and sendrecv closing clients
 }
 
-func New(serverUrl string, id int) *Client {
-    var client Client
-    raddr, err := net.ResolveTCPAddr("tcp", serverUrl)
-    if err == nil {
-        var conn *net.TCPConn
-        logging.Logger.Printf("Creating tcp connection to %v\n", serverUrl)
-        conn, err = net.DialTCP("tcp", nil, raddr)
+func New(config *raft_config.Config, id int) *Client {
+    client := Client{
+                            Id          : id,
+                            ServerList  : config.ServerList,
+                            conn        : nil,
+                            reader      : nil}
+    client.setupConnectionToServer()
+    return &client
+}
+
+func (cl *Client) setupConnectionToServer() {
+    for i:=1 ; i<len(cl.ServerList) ; i++ {
+        raddr, err := net.ResolveTCPAddr("tcp", cl.ServerList[i])
         if err == nil {
-            client = Client{Id:id, conn: conn, reader: bufio.NewReader(conn)}
+            var conn *net.TCPConn
+            cl.log_info(3, "Creating tcp connection to %v", cl.ServerList[i])
+            conn, err = net.DialTCP("tcp", nil, raddr)
+            if err == nil {
+                cl.conn = conn
+                cl.reader = bufio.NewReader(conn)
+                cl.log_info(3, "Connected to server %v", cl.ServerList[i])
+                return
+            }
+        }
+
+        if err != nil {
+            cl.log_warning(3, "Unable to connect to server %v : %v", cl.ServerList[i], err.Error())
         }
     }
-
-    if err != nil {
-        client.log_error(3, "Unable to connect to server : %v", err.Error())
-        return nil
-    }
-    return &client
+    cl.log_error(3, "Unable to connect to any server, servers may be down")
 }
 
 func (cl *Client) Read(filename string) (*fs.Msg, error) {
@@ -87,15 +103,16 @@ func (cl *Client) Delete(filename string) (*fs.Msg, error) {
 
 
 func (cl *Client) Send(str string) error {
-    cl.log_info(6, "Sending : %v", str)
+    cl.log_info(3, "Sending : %v", str)
     if cl.conn == nil {
         return errNoConn
     }
     _, err := cl.conn.Write([]byte(str))
     if err != nil {
         err = fmt.Errorf("Write error in SendRaw: %v", err)
-        cl.conn.Close()
-        cl.log_error(6, "Socket write error : %v", err.Error())
+        //cl.conn.Close()
+        cl.Close()
+        cl.log_error(3, "Socket write error : %v", err.Error())
     }
     return err
 }
@@ -119,19 +136,37 @@ func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
         // Check for redirect
         m, err = cl.SendRcvBasic(str)
         if err!=nil {
-            cl.log_error(4, "Unable to connect : %v", err.Error())
-            // TODO:: the server might be down, try different servers
-            return nil, err
+            cl.log_warning(3, "Unable to connect : %v", err.Error())
+            cl.setupConnectionToServer()
+            continue
         }
         if m.Kind == 'R' {
-            cl.log_warning(4, "Server replied with redirect error, redirecting to : %v", m.RedirectAddr)
+            cl.log_warning(3, "Server replied with redirect error, redirecting to : %v", m.RedirectAddr)
+
             cl.Close()
-            *cl = *New(m.RedirectAddr, cl.Id)
-        } else if m.Kind != 'I' {
-            // Error is not of either "not a leader" or "internal error"
-            return m, err
+
+            raddr, err1 := net.ResolveTCPAddr("tcp", m.RedirectAddr)
+            if err1 == nil {
+                var conn *net.TCPConn
+                cl.log_info(3, "Creating tcp connection to %v", m.RedirectAddr)
+                conn, err1 = net.DialTCP("tcp", nil, raddr)
+                if err1 == nil {
+                    cl.conn = conn
+                    cl.reader = bufio.NewReader(conn)
+                }
+            }
+
+            if err1 != nil {
+                cl.log_warning(3, "Unable to connect to server %v : %v", m.RedirectAddr, err1.Error())
+            }
+        } else if m.Kind == 'I' {
+            cl.log_warning(3, "Server replied with internal error")
+            cl.Close()
+            cl.setupConnectionToServer()
+            continue
         } else {
-            cl.log_warning(4, "Server replied with internal error")
+            // There is no error of either "not a leader" or "internal error"
+            return m, err
         }
     }
 
@@ -144,7 +179,7 @@ func (cl *Client) Rcv() (msg *fs.Msg, err error) {
     // we will assume no errors in server side formatting
     line, err := cl.reader.ReadString('\n')
     if err == nil {
-        cl.log_info(6, "Received : %v", line)
+        cl.log_info(3, "Received : %v", line)
         msg, err, fatalerr = fs.PaserString(line)
         if err != nil {
             return nil, err
@@ -169,7 +204,7 @@ func (cl *Client) Rcv() (msg *fs.Msg, err error) {
         }
     }
     if err != nil {
-        cl.log_error(6, "Socket read error : %v", err.Error())
+        cl.log_error(3, "Socket read error : %v", err.Error())
         cl.Close()
     }
     return msg, err
@@ -184,7 +219,7 @@ func (cl *Client) Close() {
         cl.log_info(7, "Closing client")
         cl.log_info(6, "Closing client")
         cl.log_info(5, "Closing client")*/
-        cl.log_info(4, "Closing client")
+        cl.log_info(4, "Closing client : %+v", *cl)
         cl.conn.Close()
         cl.conn = nil
     }

@@ -8,7 +8,6 @@ import (
     "sync"
     "strings"
     "cs733/assignment4/raft_config"
-    "strconv"
     "cs733/assignment4/client"
     "cs733/assignment4/client_handler/filesystem/fs"
     "errors"
@@ -18,37 +17,21 @@ import (
 
 //var mockCluster *mock.MockCluster
 var clientHandlers []*ClientHandler
-
-func getClientConnToLeader(t *testing.T) *client.Client {
-    cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
-    // Check for redirect
-    m, err := cl.Read("cs733net")
-    if err!=nil {
-        t.Error("Unable to connect")
-        // TODO:: the server might be down, try different servers
-        return nil
-    }
-    if m.Kind == 'R' {
-        cl.Close()
-        cl = client.New(m.RedirectAddr, 1)
-    }
-
-    return cl
-}
+var baseConfig *raft_config.Config
 
 func TestRPCMain(t *testing.T) {
     var err error
 
-    os.RemoveAll("/opt/raft/")
+    os.RemoveAll("/tmp/raft/")
 
     if err!=nil {
         t.Error("Unable to create cluster : ", err.Error())
     }
 
-    baseConfig := raft_config.Config{
+    baseConfig = &raft_config.Config{
         LogDir           : "/tmp/raft/",
-        ElectionTimeout  : 1000,
-        HeartbeatTimeout : 300,
+        ElectionTimeout  : 500,
+        HeartbeatTimeout : 2000,
         NumOfNodes       : 5,
         ClusterConfig    : cluster.Config   {
                                                 Peers: []cluster.PeerConfig{
@@ -70,17 +53,17 @@ func TestRPCMain(t *testing.T) {
         }}
 
     for i:=1 ; i<=5 ; i++ {
-        config := raft_config.Config(baseConfig)
+        config := raft_config.Config(*baseConfig)
         //config.Id+=i
         //config.ClientPort+=i
-        config.ElectionTimeout += 1000*(i-1)
+        config.ElectionTimeout += 90000*(i-1)
 
         clientHandlers = append(clientHandlers, New(i, &config,false))
 
         // Start client handler
         clientHandlers[i-1].Start()
     }
-    time.Sleep(3 * time.Second)
+    time.Sleep(4 * time.Second)
 }
 
 func expect(t *testing.T, response *fs.Msg, expected *fs.Msg, errstr string, err error) {
@@ -107,8 +90,70 @@ func expect(t *testing.T, response *fs.Msg, expected *fs.Msg, errstr string, err
     }
 }
 
+
+// nclients write to the same file. At the end the file should be
+// any one clients' last write
+
+func TestRPC_ConcurrentWrites(t *testing.T) {
+    nclients := 500
+    niters := 10
+    clients := make([]*client.Client, nclients)
+    for i := 0 ; i < nclients ; i++ {
+        cl := client.New(baseConfig, i)
+        for cl==nil {
+            cl = client.New(baseConfig, i)
+        }
+        defer cl.Close()
+        clients[i] = cl
+    }
+
+    errCh := make(chan error, nclients)
+    var sem sync.WaitGroup // Used as a semaphore to coordinate goroutines to begin concurrently
+    sem.Add(1)
+    ch := make(chan *fs.Msg, nclients*niters) // channel for all replies
+    for i := 0; i < nclients; i++ {
+        go func(i int, cl *client.Client) {
+            sem.Wait()
+            for j := 0; j < niters; j++ {
+                str := fmt.Sprintf("cl %d %d", i, j)
+                m, err := cl.Write("concWrite", str, 0)
+                if err != nil {
+                    errCh <- err
+                    break
+                } else {
+                    ch <- m
+                }
+            }
+        }(i, clients[i])
+    }
+    time.Sleep(100 * time.Millisecond) // give goroutines a chance
+    sem.Done()                         // Go!
+
+    // There should be no errors
+    for i := 0; i < nclients*niters; i++ {
+        select {
+        case m := <-ch:
+            if m.Kind != 'O' {
+                t.Fatalf("Concurrent write failed with kind=%c", m.Kind)
+            }
+        case err := <- errCh:
+            t.Fatal(err)
+        }
+    }
+    m, _ := clients[0].Read("concWrite")
+    // Ensure the contents are of the form "cl <i> 9"
+    // The last write of any client ends with " 9"
+    if !(m.Kind == 'C' && strings.HasSuffix(string(m.Contents), " 9")) {
+        t.Fatalf("Expected to be able to read after 1000 writes. Got msg = %v", m)
+    }
+}
+
+
 func TestRPC_BasicSequential(t *testing.T) {
-    cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
+    cl := client.New(baseConfig, 1)
+    if cl==nil {
+        t.Fatal("Client unable to connect.")
+    }
     defer cl.Close()
 
     // Read non-existent file cs733net
@@ -157,7 +202,11 @@ func TestRPC_BasicSequential(t *testing.T) {
 }
 
 func TestRPC_Binary(t *testing.T) {
-    cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
+    cl := client.New(baseConfig, 1)
+    if cl==nil {
+        t.Fatal("Client unable to connect.")
+    }
+    //cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
     defer cl.Close()
 
     // Write binary contents
@@ -173,7 +222,11 @@ func TestRPC_Binary(t *testing.T) {
 
 func TestRPC_Chunks(t *testing.T) {
     // Should be able to accept a few bytes at a time
-    cl := getClientConnToLeader(t)
+
+    cl := client.New(baseConfig, 1)
+    if cl==nil {
+        t.Fatal("Client unable to connect.")
+    }
     defer cl.Close()
 
     var err error
@@ -201,7 +254,10 @@ func TestRPC_Chunks(t *testing.T) {
 
 func TestRPC_Batch(t *testing.T) {
     // Send multiple commands in one batch, expect multiple responses
-    cl := getClientConnToLeader(t)
+    cl := client.New(baseConfig, 1)
+    if cl==nil {
+        t.Fatal("Client unable to connect.")
+    }
     defer cl.Close()
     cmds := "write batch1 3\r\nabc\r\n" +
     "write batch2 4\r\ndefg\r\n" +
@@ -217,7 +273,10 @@ func TestRPC_Batch(t *testing.T) {
 }
 
 func TestRPC_BasicTimer(t *testing.T) {
-    cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
+    cl := client.New(baseConfig, 1)
+    if cl==nil {
+        t.Fatal("Client unable to connect.")
+    }
     defer cl.Close()
 
     // Write file cs733, with expiry time of 2 seconds
@@ -273,64 +332,6 @@ func TestRPC_BasicTimer(t *testing.T) {
 }
 
 
-// nclients write to the same file. At the end the file should be
-// any one clients' last write
-
-func TestRPC_ConcurrentWrites(t *testing.T) {
-    nclients := 500
-    niters := 10
-    clients := make([]*client.Client, nclients)
-    for i := 0; i < nclients; i++ {
-        cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
-        cl.Id = i
-        if cl == nil {
-            t.Fatalf("Unable to create client #%d", i)
-        }
-        defer cl.Close()
-        clients[i] = cl
-    }
-
-    errCh := make(chan error, nclients)
-    var sem sync.WaitGroup // Used as a semaphore to coordinate goroutines to begin concurrently
-    sem.Add(1)
-    ch := make(chan *fs.Msg, nclients*niters) // channel for all replies
-    for i := 0; i < nclients; i++ {
-        go func(i int, cl *client.Client) {
-            sem.Wait()
-            for j := 0; j < niters; j++ {
-                str := fmt.Sprintf("cl %d %d", i, j)
-                m, err := cl.Write("concWrite", str, 0)
-                if err != nil {
-                    errCh <- err
-                    break
-                } else {
-                    ch <- m
-                }
-            }
-        }(i, clients[i])
-    }
-    time.Sleep(100 * time.Millisecond) // give goroutines a chance
-    sem.Done()                         // Go!
-
-    // There should be no errors
-    for i := 0; i < nclients*niters; i++ {
-        select {
-        case m := <-ch:
-            if m.Kind != 'O' {
-                t.Fatalf("Concurrent write failed with kind=%c", m.Kind)
-            }
-        case err := <- errCh:
-            t.Fatal(err)
-        }
-    }
-    m, _ := clients[0].Read("concWrite")
-    // Ensure the contents are of the form "cl <i> 9"
-    // The last write of any client ends with " 9"
-    if !(m.Kind == 'C' && strings.HasSuffix(string(m.Contents), " 9")) {
-        t.Fatalf("Expected to be able to read after 1000 writes. Got msg = %v", m)
-    }
-}
-
 // nclients cas to the same file. At the end the file should be any one clients' last write.
 // The only difference between this test and the ConcurrentWrite test above is that each
 // client loops around until each CAS succeeds. The number of concurrent clients has been
@@ -341,9 +342,9 @@ func TestRPC_ConcurrentCas(t *testing.T) {
 
     clients := make([]*client.Client, nclients)
     for i := 0; i < nclients; i++ {
-        cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
-        if cl == nil {
-            t.Fatalf("Unable to create client #%d", i)
+        cl := client.New(baseConfig, i)
+        for cl==nil {
+            cl = client.New(baseConfig, i)
         }
         defer cl.Close()
         clients[i] = cl
