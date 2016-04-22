@@ -36,6 +36,7 @@ func expect(t *testing.T, found interface{}, expected interface{}, msg string) {
 func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
 	node_index := node_id - 1
 
+    // TODO:: make single config for all nodes
 	config, err := raft_config.FromConfigFile("/tmp/raft/node" + strconv.Itoa(node_id) + "/config.json")
 	log_info(3, "Node config read : %+v", config)
 	if err != nil {
@@ -45,11 +46,11 @@ func (rafts Rafts) restoreRaft(t *testing.T, node_id int) {
     //_, err = mockCluster.AddServer(config.Id)
     if err != nil {
         rafts.shutdownRafts()
-        t.Fatalf("Unable to re-add server with id : %v : error:%v", config.Id, err.Error())
+        t.Fatalf("Unable to re-add server with id : %v : error:%v", node_id, err.Error())
     }
 	//config.MockServer = mockCluster.Servers[config.Id]
 	//config.mockServer.Heal()
-	rafts[node_index] = RestoreServerState(config)
+	rafts[node_index] = RestoreServerState(node_id, config)
 	rafts[node_index].Start()
 
 }
@@ -63,7 +64,7 @@ func makeConfigs() []*raft_config.Config {
     }
 
     configBase := raft_config.Config{
-        Id                  : 1,
+        //Id                  : 1,
         LogDir              : "log file", // Log file directory for this node
         ElectionTimeout     : 500,
         HeartbeatTimeout    : 100,
@@ -82,11 +83,11 @@ func makeConfigs() []*raft_config.Config {
     var configs []*raft_config.Config
     for i := 1; i <= 5; i++ {
         config := configBase // Copy config
-        config.Id = i
+        //config.Id = i
         config.LogDir = "/tmp/raft/node" + strconv.Itoa(i) + "/"
         //mockCluster.AddServer(i)
         //config.MockServer = mockCluster.Servers[i]
-        log_info(3, "Creating Config %v", config.Id)
+        log_info(3, "Creating Config %v", i)
         configs = append(configs, &config)
     }
     return configs
@@ -94,8 +95,8 @@ func makeConfigs() []*raft_config.Config {
 
 func makeRafts() Rafts {
     var rafts Rafts
-    for _, conf := range makeConfigs() {
-        raft := NewRaftNode(conf)
+    for i, conf := range makeConfigs() {
+        raft := NewRaftNode(i+1, conf)
         err := raft_config.ToConfigFile(conf.LogDir + "config.json", *conf)
         if err != nil {
             log_error(3, "Error in storing config to file : %v", err.Error())

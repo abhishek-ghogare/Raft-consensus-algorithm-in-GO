@@ -7,6 +7,7 @@ import (
     "math/rand"
     "sort"
     "strconv"
+    "reflect"
 )
 
 /**
@@ -21,6 +22,10 @@ func (state StateMachine) log_info(skip int, format string, args ...interface{})
     format = fmt.Sprintf("[SM:%v] %v ", strconv.Itoa(state.server_id), strconv.Itoa(state.CurrentTerm)) + format
     logging.Info(skip, format, args...)
 }
+func (state StateMachine) log_warning(skip int, format string, args ...interface{}) {
+    format = fmt.Sprintf("[SM:%v] %v ", strconv.Itoa(state.server_id), strconv.Itoa(state.CurrentTerm)) + format
+    logging.Warning(skip, format, args...)
+}
 
 const RaftStateFile = "serverState.json"
 
@@ -32,7 +37,7 @@ const (
     FOLLOWER
     LEADER
 )
-const RandomTimeout = 200
+const RandomTimeout = 1000
 
 type LogEntry struct {
     Term  int
@@ -106,11 +111,11 @@ func (err Error_Commit) Error() string {
     return "Unable to commit the data"
 }
 type Error_NotLeader struct {
-    LeaderAddr string
+    LeaderId int
 }
 func (err Error_NotLeader) Error() string{
-    if err.LeaderAddr != "" {
-        return fmt.Sprintf("This server is not a leader, current leader : %v", err.LeaderAddr)
+    if err.LeaderId != 0 {
+        return fmt.Sprintf("This server is not a leader, current leader : %v", err.LeaderId)
     } else {
         return "This server is not a leader, current leader is unknown"
     }
@@ -493,10 +498,14 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
         // Check term
         if state.CurrentTerm < event.Term {
             // This server term is not so up-to-date, so update
-            state.currentLdr = event.FromId     // current leader is the one from whom msg received
             state.CurrentTerm = event.Term
             state.VotedFor = -1
             state_changed_flag = true
+        }
+
+        // Check if the requester is leader
+        if state.CurrentTerm == event.Term {
+            state.currentLdr = event.FromId     // current leader is the one from whom msg received
         }
 
         // HERTBEAT check disabled
@@ -753,14 +762,18 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
  *                     Append from client                           *
  *                                                                  *
  ********************************************************************/
-func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []interface{}) {
+func (state *StateMachine) appendClientRequest(event *[]AppendEvent) (actions []interface{}) {
 
-    actions = make([]interface{}, 0)
+    actions = []interface{}{}
 
     switch state.myState {
     case LEADER:
-        log := LogEntry{Index: state.getLastLog().Index + 1, Term: state.CurrentTerm, Data: event.Data}
-        logs := append([]LogEntry{}, log)
+        logs := []LogEntry{}
+        for _, ev := range *event {
+            log := LogEntry{Index: state.getLastLog().Index + 1, Term: state.CurrentTerm, Data: ev.Data}
+            state.PersistentLog.Append(log)
+            logs = append(logs, log)
+        }
 
         appendReq := AppendRequestEvent{
             FromId:       state.server_id,
@@ -769,8 +782,7 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
             PrevLogTerm:  state.getLastLog().Term,
             Entries:      logs,
             LeaderCommit: state.commitIndex}
-
-        state.PersistentLog.Append(log)                                 // Append to self log
+                               // Append to self log
         state.matchIndex[state.server_id] = state.getLastLog().Index    // Update self matchIndex
 
 
@@ -778,6 +790,16 @@ func (state *StateMachine) appendClientRequest(event AppendEvent) (actions []int
     case CANDIDATE:
         fallthrough
     case FOLLOWER:
+        // Return not a leader commit action
+        for _, ev := range *event {
+            action := CommitAction{
+                Log : LogEntry{Index:-1, Term: state.CurrentTerm, Data: ev.Data},
+                Err : Error_NotLeader{ LeaderId : state.GetCurrentLeader()} }
+
+            actions = append(actions, action)
+        }
+
+        state.log_warning(3, "Not a leader, redirecting to leader")
     }
     return actions
 }
@@ -801,9 +823,10 @@ func (state *StateMachine) ProcessEvent(event interface{}) []interface{} {
         return state.voteRequestResponse(event.(RequestVoteRespEvent))
     case TimeoutEvent:
         return state.timeout(event.(TimeoutEvent))
-    case AppendEvent:
-        return state.appendClientRequest(event.(AppendEvent))
+    case *[]AppendEvent:
+        return state.appendClientRequest(event.(*[]AppendEvent))
     default:
+        state.log_error(3, "Invalid event type %+v", reflect.TypeOf(event))
         return nil
     }
 }

@@ -95,7 +95,6 @@ func (cl *Client) Send(str string) error {
     if err != nil {
         err = fmt.Errorf("Write error in SendRaw: %v", err)
         cl.conn.Close()
-        cl.conn = nil
         cl.log_error(6, "Socket write error : %v", err.Error())
     }
     return err
@@ -116,7 +115,7 @@ func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
 
     var m *fs.Msg
 
-    for retries := 1 ; retries < 10 ; retries++ {
+    for retries := 1 ; retries < 20 ; retries++ {
         // Check for redirect
         m, err = cl.SendRcvBasic(str)
         if err!=nil {
@@ -125,9 +124,9 @@ func (cl *Client) SendRcv(str string) (msg *fs.Msg, err error) {
             return nil, err
         }
         if m.Kind == 'R' {
-            cl.log_warning(4, "Server replied with redirect error, redirecting to : %v", msg.RedirectAddr)
+            cl.log_warning(4, "Server replied with redirect error, redirecting to : %v", m.RedirectAddr)
             cl.Close()
-            cl = New(m.RedirectAddr, 1)
+            *cl = *New(m.RedirectAddr, cl.Id)
         } else if m.Kind != 'I' {
             // Error is not of either "not a leader" or "internal error"
             return m, err
@@ -178,16 +177,14 @@ func (cl *Client) Rcv() (msg *fs.Msg, err error) {
 
 
 func (cl *Client) Close() {
-    if cl != nil && cl.conn != nil {
+    if cl != nil && cl.conn != nil {/*
         cl.log_info(10, "Closing client")
         cl.log_info(9, "Closing client")
         cl.log_info(8, "Closing client")
         cl.log_info(7, "Closing client")
         cl.log_info(6, "Closing client")
-        cl.log_info(5, "Closing client")
+        cl.log_info(5, "Closing client")*/
         cl.log_info(4, "Closing client")
-        cl.log_info(3, "Closing client")
-        cl.log_info(2, "Closing client")
         cl.conn.Close()
         cl.conn = nil
     }

@@ -5,55 +5,52 @@ import (
     "cs733/assignment4/raft_config"
     "github.com/cs733-iitb/cluster"
     "os"
-    "cs733/assignment4/logging"
+    "path"
+    "strconv"
 )
 
 
 // Returns a Node object
-func NewRaftNode(config *raft_config.Config) *RaftNode {
+func NewRaftNode(Id int, config *raft_config.Config) *RaftNode {
     // Remove all persistent store
-    os.RemoveAll(config.LogDir)
+    os.RemoveAll(config.LogDir + "/raft_" + strconv.Itoa(Id) + "/")
 
-
-    logging.Info(2, "Opening log file : %v", config.LogDir)
-
-    clusterServer, err := cluster.New(config.Id,config.ClusterConfig)
+    clusterServer, err := cluster.New(Id,config.ClusterConfig)
     if err!=nil {
         (&RaftNode{}).log_error(3, "Unable to create cluster server : %v", err.Error())
     }
 
-    server_state := rsm.New(config)
+    server_state := rsm.New(Id, config)
     raft := RaftNode{
         server_state        : server_state,
         clusterServer       : clusterServer,
-        //clusterServer       : config.MockServer,
-        eventCh             : make(chan interface{}),
+        eventCh             : make(chan interface{}, 500),   // TODO:: change size to 500
         timeoutCh           : make(chan interface{}),
         CommitChannel       : make(chan rsm.CommitAction, 20000),
         ShutdownChannel     : make(chan int),
         LogDir              : config.LogDir,
         isUp                : false,
         isInitialized       : true,
-        serverList          : config.ServerList}
+        ServerList          : config.ServerList}
 
     // Storing server state TODO:: Store server state only on valid StateStore action
-    raft.server_state.ToServerStateFile(config.LogDir + rsm.RaftStateFile)
+    statePath := path.Clean(config.LogDir + "/raft_" + strconv.Itoa(Id) + "/" + rsm.RaftStateFile)
+    err = raft.server_state.ToServerStateFile(statePath)
     raft.log_info(3, "New raft node created and initialized")
     return &raft
 }
 
-func RestoreServerState(config *raft_config.Config) *RaftNode {
+func RestoreServerState(Id int, config *raft_config.Config) *RaftNode {
 
-    clusterServer, err := cluster.New(config.Id,config.ClusterConfig)
+    clusterServer, err := cluster.New(Id,config.ClusterConfig)
     if err!=nil {
         (&RaftNode{}).log_error(3, "Unable to create cluster server : %v", err.Error())
     }
 
-    server_state := rsm.Restore(config)
+    server_state := rsm.Restore(Id, config)
     raft := RaftNode{
         server_state        : server_state,
         clusterServer       : clusterServer,
-        //clusterServer       : config.MockServer,
         eventCh             : make(chan interface{}),
         timeoutCh           : make(chan interface{}),
         CommitChannel       : make(chan rsm.CommitAction, 20000),
@@ -61,7 +58,7 @@ func RestoreServerState(config *raft_config.Config) *RaftNode {
         LogDir              : config.LogDir,
         isUp                : false,
         isInitialized       : true,
-        serverList          : config.ServerList}
+        ServerList          : config.ServerList}
 
     raft.log_info(3, "Raft node restored and initialised")
     return &raft

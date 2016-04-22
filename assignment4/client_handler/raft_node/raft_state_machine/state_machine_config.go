@@ -6,6 +6,8 @@ import (
     "github.com/cs733-iitb/log"
     "cs733/assignment4/raft_config"
     "fmt"
+    "strconv"
+    "path"
 )
 
 func fromServerStateFile(serverStateFile string) (serState *StateMachine, err error) {
@@ -46,10 +48,10 @@ func (state *StateMachine) ToServerStateFile(serverStateFile string) (err error)
  *
  *
  */
-func New(config *raft_config.Config) (server *StateMachine) {
+func New(Id int, config *raft_config.Config) (server *StateMachine) {
 
     server = &StateMachine{
-        server_id       : config.Id,
+        server_id       : Id,
         CurrentTerm     : 0,
         VotedFor        : -1,
         numberOfNodes   : config.NumOfNodes,
@@ -60,14 +62,16 @@ func New(config *raft_config.Config) (server *StateMachine) {
         matchIndex      : make([]int64, config.NumOfNodes+1),
         receivedVote    : make([]int, config.NumOfNodes+1),
         myState         : FOLLOWER,
-        currentLdr      : config.Id,    // imposing that current leader is self
+        currentLdr      : Id,    // imposing that current leader is self
         ElectionTimeout : config.ElectionTimeout,
         HeartbeatTimeout: config.HeartbeatTimeout}
 
     // Open persistent log
-    lg, err := log.Open(config.LogDir)
+    logPath := path.Clean(config.LogDir + "/raft_" + strconv.Itoa(Id) + "/")
+    server.log_info(3, "Opening raft logs : %v", logPath + "/")
+    lg, err := log.Open(logPath)
     if err != nil {
-        server.log_error(3, "Unable to open log file : %v\n", err)
+        server.log_error(3, "Unable to open raft logs : %v", err)
         return nil
     }
 
@@ -90,16 +94,17 @@ func New(config *raft_config.Config) (server *StateMachine) {
  *
  *
  */
-func Restore(config *raft_config.Config) (state *StateMachine) {
+func Restore(Id int, config *raft_config.Config) (state *StateMachine) {
     // Restore from file
-    restored_state, err := fromServerStateFile(config.LogDir + RaftStateFile)
+    statePath := path.Clean(config.LogDir + "/raft_" + strconv.Itoa(Id) + "/" + RaftStateFile)
+    restored_state, err := fromServerStateFile(statePath)
     if err != nil {
         fmt.Printf("Unable to restore server state : %v\n", err.Error())
         os.Exit(2)
     }
 
     // Copy persistent state variables to newly initialized state
-    new_state              := New(config)
+    new_state              := New(Id, config)
     new_state.CurrentTerm   = restored_state.CurrentTerm
     new_state.VotedFor      = restored_state.VotedFor
     new_state.LastApplied   = restored_state.LastApplied

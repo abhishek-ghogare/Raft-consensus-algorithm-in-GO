@@ -10,6 +10,7 @@ import (
     rsm "cs733/assignment4/client_handler/raft_node/raft_state_machine"
     "cs733/assignment4/logging"
     "fmt"
+    "path"
 )
 
 func (rn RaftNode) log_error(skip int, format string, args ...interface{}) {
@@ -27,25 +28,25 @@ func (rn RaftNode) log_warning(skip int, format string, args ...interface{}) {
 
 
 type RaftNode struct {
-                           // implements Node interface
+                             // implements Node interface
     eventCh         chan interface{}
     timeoutCh       chan interface{}
-                           //config          Config
-    LogDir          string // Log file directory for this node
+                             //config          Config
+    LogDir          string   // Log file directory for this node
     server_state   *rsm.StateMachine
     clusterServer   cluster.Server
-    //clusterServer   *mock.MockServer
-    timer          *time.Timer
+                             //clusterServer   *mock.MockServer
+    timer           *time.Timer
 
-                           // A channel for client to listen on. What goes into Append must come out of here at some point.
+                             // A channel for client to listen on. What goes into Append must come out of here at some point.
     CommitChannel   chan rsm.CommitAction
     ShutdownChannel chan int
     isUp            bool
     isInitialized   bool
 
-                           // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
+                             // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
     waitShutdown    sync.WaitGroup
-    serverList      []string    // List of addrs of other raft nodes, 0th addr is null
+    ServerList      []string // List of addrs of other raft nodes, 0th addr is null
 }
 
 
@@ -79,30 +80,51 @@ func (rn *RaftNode) processEvents() {
             actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
         case ev = <-rn.eventCh:
-        // TODO:: Optimization: club all append requests
-            switch ev.(type) {
-            case rsm.AppendEvent:
-                actions := make([]interface{}, 0)
-                if rn.GetServerState() != rsm.LEADER {
-                    //log := ev.(rsm.AppendEvent).Data
-                    actions = append(actions, rsm.CommitAction{
-                                                                Log : rsm.LogEntry{},
-                                                                Err : rsm.Error_NotLeader{
-                                                                    LeaderAddr : rn.serverList[rn.server_state.GetCurrentLeader()] } })
-                    rn.log_warning(3, "Not a leader, redirecting to leader, commitAction : %v", actions[0])
 
-                } else {
-                    rn.log_info(3, "Append request received") // TODO:: Optimization: club all append requests
-                    actions = rn.server_state.ProcessEvent(ev)
+            // Get batch of max 500 requests
+            appendEvents     := []rsm.AppendEvent{}
+            lastAppliedEvent := rsm.UpdateLastAppliedEvent{}
+
+        RequestFetcherLoop:
+            for count:=0 ;  ; count++{
+                // Serve first event fetched from event channel
+                switch ev.(type) {
+                case rsm.AppendEvent:
+                    appendEvents = append(appendEvents, ev.(rsm.AppendEvent))
+                case rsm.UpdateLastAppliedEvent:
+                    if lastAppliedEvent.Index < ev.(rsm.UpdateLastAppliedEvent).Index {
+                        lastAppliedEvent = ev.(rsm.UpdateLastAppliedEvent)
+                    }
                 }
-                rn.doActions(actions)
-            case rsm.UpdateLastAppliedEvent:  // TODO:: Optimization: club all append requests
-                rn.server_state.LastApplied = ev.(rsm.UpdateLastAppliedEvent).Index
+
+                if count>500 {
+                    break
+                }
+
+                // Fetch next event if available, or break
+                select {
+                case ev = <- rn.eventCh:
+                    rn.log_info(3, "Fetching another event, append events : %v", len(appendEvents))
+                default:
+                    rn.log_info(3, "All events fetched : %v", len(appendEvents))
+                    break RequestFetcherLoop
+                }
+            }
+
+            actions := []interface{}{}
+            if len(appendEvents) > 0 {
+                rn.log_info(3, "Append request/s received of length %v", len(appendEvents))
+                actions = rn.server_state.ProcessEvent(&appendEvents)
+            }
+
+            if lastAppliedEvent.Index > 0 {
+                rn.server_state.LastApplied = lastAppliedEvent.Index
                 rn.log_info(3, "Update lastApplied to %v", rn.server_state.LastApplied)
                 stateStoreAction := rn.server_state.GetStateStoreAction()
-                actions := []interface{}{stateStoreAction}
-                rn.doActions(actions)
+                actions = []interface{}{stateStoreAction}
             }
+
+            rn.doActions(actions)
         case ev = <- rn.clusterServer.Inbox():
             ev := ev.(*cluster.Envelope)
 
@@ -191,29 +213,21 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
         case rsm.AlarmAction :
             action := action.(rsm.AlarmAction)
             rn.timer.Reset(time.Duration(action.Time) * time.Millisecond)
+            rn.log_info(3, "Alarm action received of time %v", action.Time)
 
         /*
          *  State store action
          */
         case rsm.StateStore:
             stateStore := action.(rsm.StateStore)
-            stateStore.State.ToServerStateFile(rn.LogDir + rsm.RaftStateFile)
+            statePath := path.Clean(rn.LogDir + "/raft_" + strconv.Itoa(rn.GetId()) + "/" + rsm.RaftStateFile)
+            stateStore.State.ToServerStateFile(statePath)
             //rn.log_info(3, "state store received")
         default:
             rn.log_error(3, "Unknown action received : %v", action)
         }
     }
 }
-/*
-func RegisterEncoding() {
-    gob.Register(rsm.AppendRequestEvent{})
-    gob.Register(rsm.AppendRequestRespEvent{})
-    gob.Register(rsm.RequestVoteEvent{})
-    gob.Register(rsm.RequestVoteRespEvent{})
-    //gob.Register(timeoutEvent{})
-    gob.Register(rsm.AppendEvent{})
-    gob.Register(rsm.LogEntry{})
-}*/
 
 func (rn *RaftNode) Start() {
     rn.log_info(4, "Starting raft node")

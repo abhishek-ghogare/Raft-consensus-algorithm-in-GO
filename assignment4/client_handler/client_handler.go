@@ -16,7 +16,7 @@ import (
     "encoding/gob"
 )
 
-const CONNECTION_TIMEOUT = 1000000 // in seconds
+const CONNECTION_TIMEOUT = 5 // in seconds
 
 func (rn *ClientHandler) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[CH:%v] ", strconv.Itoa(rn.ClientPort)) + format
@@ -51,7 +51,7 @@ type ClientHandler struct {
     WaitOnServer    sync.WaitGroup
 }
 
-func New(config *raft_config.Config, restore bool) (ch *ClientHandler) {
+func New(Id int, config *raft_config.Config, restore bool) (ch *ClientHandler) {
 
     gob.Register(fs.Msg{})
     gob.Register(Request{})
@@ -59,19 +59,19 @@ func New(config *raft_config.Config, restore bool) (ch *ClientHandler) {
     gob.Register(rsm.AppendRequestRespEvent{})
     gob.Register(rsm.RequestVoteEvent{})
     gob.Register(rsm.RequestVoteRespEvent{})
-    //gob.Register(timeoutEvent{})
+    //gob.Register(rsm.TimeoutEvent{})          // Not sending timeout event, no need to register
     gob.Register(rsm.AppendEvent{})
     gob.Register(rsm.LogEntry{})
 
     ch = &ClientHandler{
         ActiveReq   : make(map[int]chan fs.Msg),
         NextConnId  : 0,
-        ClientPort  : config.ClientPort }
+        ClientPort  : config.ClientPorts[Id] }
 
     if restore {
-        ch.Raft = raft_node.RestoreServerState(config)
+        ch.Raft = raft_node.RestoreServerState(Id, config)
     } else {
-        ch.Raft = raft_node.NewRaftNode(config)
+        ch.Raft = raft_node.NewRaftNode(Id, config)
     }
 
     return ch
@@ -189,9 +189,8 @@ func (ch *ClientHandler) serve(conn *net.TCPConn) {
     for {
         msg, msgerr, fatalerr := fs.GetMsg(reader)
         if fatalerr != nil {
-            ch.log_error(3, "Error occured while getting a msg from client : %v, %v", msgerr, fatalerr)
             if (!ch.reply(conn, &fs.Msg{Kind: 'M'})) {
-                ch.log_error(3, "Reply to client was not sucessful")
+                ch.log_error(3, "Reply to client was not sucessful : %v, %v", msgerr, fatalerr)
             }
             conn.Close()
             break
@@ -220,7 +219,7 @@ func (ch *ClientHandler) serve(conn *net.TCPConn) {
         case  <- time.After(CONNECTION_TIMEOUT*time.Second) :
             // Connection timed out
             ch.log_error(3, "Connection timed out, closing the connection")
-            // TODO:: send proper msg
+            ch.reply(conn, &fs.Msg{Kind:'I'})
             conn.Close()
         }
 
@@ -250,7 +249,9 @@ func (ch *ClientHandler) handleCommits() {
                     response = &fs.Msg{Kind:'I'}
                 case rsm.Error_NotLeader:               // not a leader, redirect error
                     errorNotLeader := commitAction.Err.(rsm.Error_NotLeader)
-                    response = &fs.Msg{Kind:'R', RedirectAddr:errorNotLeader.LeaderAddr}
+                    response = &fs.Msg {
+                                            Kind            : 'R',
+                                            RedirectAddr    : ch.Raft.ServerList[ errorNotLeader.LeaderId ] }
                 default:
                     ch.log_error(3, "Unknown error type : %v", commitAction.Err)
                 }

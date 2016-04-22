@@ -46,8 +46,7 @@ func TestRPCMain(t *testing.T) {
     }
 
     baseConfig := raft_config.Config{
-        Id               : 0,
-        LogDir           : "/opt/raft/",
+        LogDir           : "/tmp/raft/",
         ElectionTimeout  : 1000,
         HeartbeatTimeout : 300,
         NumOfNodes       : 5,
@@ -60,8 +59,7 @@ func TestRPCMain(t *testing.T) {
                                                     {Id: 5, Address: "localhost:7005"},
                                                 },
                                             },
-        //MockServer       : nil,
-        ClientPort       : 9000,
+        ClientPorts      : []int{ 0, 9001, 9002, 9003, 9004, 9005},
         ServerList       : []string{
             "",
             "localhost:9001",
@@ -72,13 +70,12 @@ func TestRPCMain(t *testing.T) {
         }}
 
     for i:=1 ; i<=5 ; i++ {
-        config := baseConfig
-        config.Id+=i
-        config.ClientPort+=i
-        config.ElectionTimeout += 100000*(i-1)
-        config.LogDir+="raft_"+strconv.Itoa(i)+"/"
+        config := raft_config.Config(baseConfig)
+        //config.Id+=i
+        //config.ClientPort+=i
+        config.ElectionTimeout += 1000*(i-1)
 
-        clientHandlers = append(clientHandlers, New(&config,false))
+        clientHandlers = append(clientHandlers, New(i, &config,false))
 
         // Start client handler
         clientHandlers[i-1].Start()

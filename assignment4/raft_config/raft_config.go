@@ -7,7 +7,7 @@ import (
 )
 
 type Config struct {
-    Id               int    // this node's id. One of the cluster's entries should match.
+    //Id               int    // this node's id. One of the cluster's entries should match.
     LogDir           string // Log file directory for this node
     ElectionTimeout  int
     HeartbeatTimeout int
@@ -15,8 +15,8 @@ type Config struct {
     ClusterConfig    cluster.Config
 
     // Client handler config
-    ClientPort      int
-    ServerList      []string // 0th server is null
+    ClientPorts      []int
+    ServerList       []string // 0th server is null
 }
 
 
