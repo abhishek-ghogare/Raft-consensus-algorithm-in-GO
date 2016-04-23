@@ -11,19 +11,21 @@ function execute {
 # Execute a command $1 on all
 # executeOnAll <cmd>
 function executeOnAll {
-	for i in `seq 38 42`
+	for i in `seq 66 70`
 	do
-		execute "$1" "nsl-$i"
+		execute "$1" "osl-$i"
 	done
 }
 
 # Start raft_main process
 # startServer <host>
 function startServer {
-	sshpass -p $pass ssh $username@$1 'cd ~/raft ; exec 2>>debug.log 1>>debug.log ; nohup ./raft_main -clean_start 2>&1 &' &
+	id=$((`cut -d '-' -f 2 <<<$1`-65))
+	sshpass -p $pass ssh $username@$1 "exec 2>>./raft/debug.log 1>>./raft/debug.log ; nohup ./raft_main -clean_start -id $id |& ./pp 2>&1 &" &
 }
 function resumeServer {
-	sshpass -p $pass ssh $username@$1 'cd ~/raft ; nohup ./raft_main 2>&1 &' &
+	id=$((`cut -d '-' -f 2 <<<$1`-65))
+	sshpass -p $pass ssh $username@$1 'exec 2>>raft/raft_$(($(cut -d '-' -f 2 <<<$1)-65))/debug.log 1>>raft/raft_$(($(cut -d '-' -f 2 <<<$1)-65))/debug.log ; nohup ./raft_main -id $(($(cut -d '-' -f 2 <<<$1)-65) |& ./pp 2>&1 &' &
 }
 
 # Stops raft_main process
@@ -34,19 +36,19 @@ function stopServer {
 
 
 function startAll {
-	for i in `seq 38 42`
+	for i in `seq 66 70`
 	do
-		echo "starting nsl-$i"
-		startServer "nsl-$i"
+		echo "starting osl-$i"
+		startServer "osl-$i"
 	done
 }
 
 function resumeAll {
-	for i in `seq 38 42`
+	for i in `seq 66 70`
 	do
-		echo "resuming nsl-$i"
-		resumeServer "nsl-$i"
-	done
+		echo "resuming osl-$i"
+		resumeServer "osl-$i"
+	done	
 }
 
 
@@ -78,8 +80,16 @@ case "$1" in
 	-3All)
 		executeOnAll 'killall raft_main -3'
 		;;
+	getlogs)
+		mkdir logs -p
+		for i in `seq 66 70`
+		do
+			echo "getting logs of osl-$i"
+			execute "cat raft/debug.log" osl-$i  > logs/osl-$i
+		done
+		;;
 	*)
 		echo "Unknown command"
-		echo "$0 [start|stop|resume|startAll|stopAll|resumeAll|clearAll|-3All] <host>"
+		echo "$0 [ start | stop | resume | startAll | stopAll | resumeAll | clearAll | -3All | getlogs ] <host>"
 		;;
 esac

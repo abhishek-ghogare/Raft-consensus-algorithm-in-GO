@@ -16,7 +16,7 @@ import (
     "encoding/gob"
 )
 
-const CONNECTION_TIMEOUT = 10 // in seconds
+const CONNECTION_TIMEOUT = 100 // in seconds
 
 func (chdlr *ClientHandler) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[CH:%v] ", chdlr.Raft.GetId()) + format

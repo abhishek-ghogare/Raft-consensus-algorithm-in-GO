@@ -9,7 +9,6 @@ import (
     "cs733/assignment4/logging"
     "log"
     "path"
-    "strconv"
 )
 
 func main() {
@@ -30,7 +29,7 @@ func main() {
         os.Exit(2)
     }
 
-    logPath := path.Clean(config.LogDir + "/raft_" + strconv.Itoa(*serverId) + "/debug.log")
+    logPath := path.Clean(config.LogDir + "/debug.log")
     f, err := os.OpenFile(logPath, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
     logging.Logger = log.New(f, "", log.Ldate | log.Lmicroseconds)
     logging.Logger.Println("Logger initialised")
