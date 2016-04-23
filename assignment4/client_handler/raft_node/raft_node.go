@@ -77,6 +77,7 @@ func (rn *RaftNode) processEvents() {
         var ev interface{}
         select {
         case ev = <-rn.timer.C:
+            rn.log_info(3, "Timeout event occured")
             actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
 
@@ -99,9 +100,9 @@ func (rn *RaftNode) processEvents() {
             case rsm.AppendRequestRespEvent:
                 rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
             case rsm.RequestVoteEvent :
-            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+                rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
             case rsm.RequestVoteRespEvent :
-            //rn.prnt("%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.server_state.server_id, ev.Pid, ev.Msg)
+                rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
             }
 
             event := ev.Msg.(interface{})
@@ -118,7 +119,7 @@ func (rn *RaftNode) processEvents() {
             lastAppliedEvent := rsm.UpdateLastAppliedEvent{}
 
         RequestFetcherLoop:
-            for count:=0 ;  ; count++{
+            for count:=1 ;  ; count++{
                 // Serve first event fetched from event channel
                 switch ev.(type) {
                 case rsm.AppendEvent:
@@ -129,7 +130,7 @@ func (rn *RaftNode) processEvents() {
                     }
                 }
 
-                if count>200 {
+                if count>=rsm.BATCHSIZE {
                     break
                 }
 
@@ -138,7 +139,6 @@ func (rn *RaftNode) processEvents() {
                 case ev = <- rn.eventCh:
                     //rn.log_info(3, "Fetching another event, append events : %v", len(appendEvents))
                 default:
-                    rn.log_info(3, "All events fetched : %v", len(appendEvents))
                     break RequestFetcherLoop
                 }
             }
@@ -199,7 +199,7 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
                 if length!=0 {
                     start = appendReqE.Entries[0].Index
                     end = appendReqE.Entries[length-1].Index
-                    rn.log_info(3, "%25v %2v -->> %-14v from index %v to %v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, start, end)
+                    rn.log_info(3, "%25v %2v -->> %-14v from:%v to:%v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, start, end)
                 } else {
                     rn.log_info(3, "%25v %2v -->> %-14v Heartbeat %+v", reflect.TypeOf(action.Event).Name(), rn.GetId(), action.ToId, action.Event)
                 }
@@ -231,7 +231,7 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
         case rsm.AlarmAction :
             action := action.(rsm.AlarmAction)
             rn.timer.Reset(time.Duration(action.Time) * time.Millisecond)
-            rn.log_info(3, "Alarm action received of time %v", action.Time)
+            //rn.log_info(3, "Alarm action received of time %v", action.Time)
 
         /*
          *  State store action

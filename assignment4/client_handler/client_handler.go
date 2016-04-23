@@ -103,7 +103,7 @@ func (ch *ClientHandler) Start() {
             tcp_conn, err := tcp_acceptor.AcceptTCP()
             ch.check(err)
 
-            <-ch.MaxConcurrentClients // Wait on client ticket
+            //<-ch.MaxConcurrentClients // Wait on client ticket
             go ch.serve(tcp_conn)
         }
         ch.WaitOnServerExit.Done()
@@ -193,7 +193,7 @@ func (ch *ClientHandler) reply(conn *net.TCPConn, msg *fs.Msg) bool {
 }
 
 func (ch *ClientHandler) serve(conn *net.TCPConn) {
-    defer func() { ch.MaxConcurrentClients<-0 }()    // Give next client the ticket
+    //defer func() { ch.MaxConcurrentClients<-0 }()    // Give next client the ticket
 
     reader := bufio.NewReader(conn)
     for {
@@ -249,7 +249,7 @@ func (chdlr *ClientHandler) handleCommits() {
             // Check if replication was successful
             if commitAction.Err == nil {
                 // Apply request to state machine, i.e. Filesystem
-                chdlr.log_info(3, "Applying request to file system : %+v", request)
+                 //chdlr.log_info(3, "Applying request to file system : %+v", request)
                 response = fs.ProcessMsg(&request.Message)          // TODO, this is global file system,
             } else {
                 switch commitAction.Err.(type) {

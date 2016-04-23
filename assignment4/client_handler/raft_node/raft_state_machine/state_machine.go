@@ -38,6 +38,7 @@ const (
     LEADER
 )
 const RandomTimeout = 1000
+const BATCHSIZE = 100 // Send logs to followers in batches of 200
 
 type LogEntry struct {
     Term  int
@@ -205,6 +206,13 @@ func (state *StateMachine) getLastLog() *LogEntry {
     log := state.GetLogOf(state.PersistentLog.GetLastIndex())
     return log
 }
+func (state *StateMachine) GetLastLogIndex() int64 {
+    return state.PersistentLog.GetLastIndex()
+}
+func (state *StateMachine) GetLastLogTerm() int { // TODO:: use this
+    log, _ := state.PersistentLog.Get(state.PersistentLog.GetLastIndex())
+    return log.(LogEntry).Term
+}
 //  Return log of given index
 func (state *StateMachine)GetLogOf(index int64) *LogEntry {
     l, e := state.PersistentLog.Get(index)
@@ -217,7 +225,7 @@ func (state *StateMachine)GetLogOf(index int64) *LogEntry {
     j := l.(LogEntry)
     return &j
 }
-//  Return all logs from given index(including index) to the end
+//  Return maximum batch size logs from given index(including index) to end
 func (state *StateMachine)getLogsFrom(index int64) *[]LogEntry {
     logs := []LogEntry{}
 
@@ -229,6 +237,10 @@ func (state *StateMachine)getLogsFrom(index int64) *[]LogEntry {
             return nil
         } else {
             logs = append(logs,l.(LogEntry))
+        }
+
+        if len(logs) >= BATCHSIZE {
+            break
         }
     }
 
@@ -276,11 +288,11 @@ func (state *StateMachine) initialiseLeader() {
     state.myState = LEADER
     state.matchIndex = make([]int64, state.numberOfNodes+1)
     state.nextIndex = make([]int64, state.numberOfNodes+1)
-    state.matchIndex[state.server_id] = state.getLastLog().Index
+    state.matchIndex[state.server_id] = state.GetLastLogIndex()
 
     // initialise nextIndex
     for i := 0; i <= state.numberOfNodes; i++ {
-        state.nextIndex[i] = state.getLastLog().Index + 1
+        state.nextIndex[i] = state.GetLastLogIndex() + 1
     }
 }
 
@@ -321,7 +333,7 @@ func (state *StateMachine) voteRequest(event RequestVoteEvent) (actions []interf
     // If not voted for this term
     if state.VotedFor == -1 {
         // votedFor will be -1 ONLY for follower state, in case of leader/candidate it will be set to self id
-        if event.LastLogTerm > state.getLastLog().Term || event.LastLogTerm == state.getLastLog().Term && event.LastLogIndex >= state.getLastLog().Index {
+        if event.LastLogTerm > state.getLastLog().Term || event.LastLogTerm == state.getLastLog().Term && event.LastLogIndex >= state.GetLastLogIndex() {
             state.VotedFor = event.FromId
             state.CurrentTerm = event.Term
             state_changed_flag = true
@@ -429,7 +441,7 @@ func (state *StateMachine) voteRequestResponse(event RequestVoteRespEvent) (acti
                 appendReq := AppendRequestEvent{
                     FromId:       state.server_id,
                     Term:         state.CurrentTerm,
-                    PrevLogIndex: state.getLastLog().Index,
+                    PrevLogIndex: state.GetLastLogIndex(),
                     PrevLogTerm:  state.getLastLog().Term,
                     Entries:      []LogEntry{},
                     LeaderCommit: state.commitIndex}
@@ -468,7 +480,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
     if state.CurrentTerm > event.Term {
         // Append request is not from latest leader
         // In all states applicable
-        appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: state.CurrentTerm, Success: false, LastLogIndex: state.getLastLog().Index}
+        appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: state.CurrentTerm, Success: false, LastLogIndex: state.GetLastLogIndex()}
         resp := SendAction{ToId: event.FromId, Event: appendResp}
         actions = append(actions, resp)
         return actions
@@ -478,7 +490,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
     case LEADER:
         // mystate == leader && term == currentTerm, this is impossible, as two leaders will never be elected at any term
         if event.Term == state.CurrentTerm {
-            appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: -1, Success: false, LastLogIndex: state.getLastLog().Index}
+            appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: -1, Success: false, LastLogIndex: state.GetLastLogIndex()}
             resp := SendAction{ToId: event.FromId, Event: appendResp}
             actions = append(actions, resp)
             return actions
@@ -515,29 +527,38 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
            // Not required to check the last log index for heartbeat event
            if len(event.Entries) == 0 {
                // Empty log entries for heartbeat
-               appendResp := appendRequestRespEvent{FromId:server.server_id, Term:server.currentTerm, Success:true, LastLogIndex:server.getLastLog().Index}
+               appendResp := appendRequestRespEvent{FromId:server.server_id, Term:server.currentTerm, Success:true, LastLogIndex:server.GetLastLogIndex()}
                resp := sendAction{toId:event.FromId, event:appendResp}
                actions = append(actions, resp)
                return actions
            }*/
 
         // Check if previous entries are missing
-        if state.getLastLog().Index < event.PrevLogIndex ||
-           state.GetLogOf(event.PrevLogIndex).Term /*logs[event.PrevLogIndex].Term*/ != event.PrevLogTerm {
+        if state.GetLastLogIndex()                 <   event.PrevLogIndex ||
+           state.GetLogOf(event.PrevLogIndex).Term  !=  event.PrevLogTerm {
             // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
-            appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: state.CurrentTerm, Success: false, LastLogIndex: state.getLastLog().Index}
+            appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: state.CurrentTerm, Success: false, LastLogIndex: state.GetLastLogIndex()}
             resp := SendAction{ToId: event.FromId, Event: appendResp}
             actions = append(actions, resp)
             return actions
         }
 
+
+        logsToAppend := event.Entries
+
+        // remove logs from logsToAppend which are present in our logs
+        for len(logsToAppend)       >   0 &&                                        // logs to append is non empty list
+            state.GetLastLogIndex() >=  logsToAppend[0].Index &&                    // if there is still intersection between our logs and logs to append
+            logsToAppend[0].Term    ==  state.GetLogOf(logsToAppend[0].Index).Term {// if term match -> logs match -> we have this log
+            logsToAppend = logsToAppend[1:]                                         // skip matched log
+        }
+
         // Check if we have outdated/garbage logs
-        if state.getLastLog().Index > event.PrevLogIndex {
+        if len(logsToAppend)>0 && state.GetLastLogIndex() >= logsToAppend[0].Index {
             // There are entries from last leaders
             // truncate them up to the end
-            //truncatedLogs := server.getLogsFrom(event.PrevLogIndex+1)// logs[event.PrevLogIndex+1:]
-            state.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs from %v to %v", event.PrevLogIndex, event.PrevLogIndex+1, state.PersistentLog.GetLastIndex())
-            truncatedLogs := state.truncateLogsFrom(event.PrevLogIndex+1)// logs[:event.PrevLogIndex+1]
+            state.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs from %v to %v", event.PrevLogIndex, logsToAppend[0].Index, state.GetLastLogIndex())
+            truncatedLogs := state.truncateLogsFrom(logsToAppend[0].Index)
             for _, log := range *truncatedLogs {
                 action := CommitAction{Log: log, Err: Error_Commit{}}
                 actions = append(actions, action)
@@ -545,19 +566,19 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
         }
 
         // Update log if entries are not present
-        for _, log := range event.Entries {
+        for _, log := range logsToAppend {
             state.PersistentLog.Append(log)
         }
 
         if event.LeaderCommit > state.commitIndex {
             var commitFrom, commitUpto int64
             // If leader has commited entries, so should this server
-            if event.LeaderCommit <= state.getLastLog().Index {
+            if event.LeaderCommit <= state.GetLastLogIndex() {
                 commitFrom = state.commitIndex + 1
                 commitUpto = event.LeaderCommit
             } else {
                 commitFrom = state.commitIndex + 1
-                commitUpto = state.getLastLog().Index
+                commitUpto = state.GetLastLogIndex()
             }
 
             // Loads logs from persistent store from commitIndex to end if not in in-memory logs
@@ -580,7 +601,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
             FromId      : state.server_id,
             Term        : state.CurrentTerm,
             Success     : true,
-            LastLogIndex: state.getLastLog().Index }
+            LastLogIndex: state.GetLastLogIndex() }
         resp := SendAction{ToId: event.FromId, Event: appendResp}
         actions = append(actions, resp)
     }
@@ -638,31 +659,35 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
     case LEADER:
         if !event.Success {
             // there are holes in follower's log
-            // TODO:: We are not checking here if the requesting log is actually in our logs. Note that nextIndex is not monotonically increasing or decreasing, depending on it for sending logs and receiving logs will lead to errors
-            //
 
-            if event.LastLogIndex < state.nextIndex[event.FromId] {
+            // Do not upgrade nextIndex if last log index is grater than nextIndex for that node
+            // since, this might be delayed response
+            if state.nextIndex[event.FromId] > event.LastLogIndex {
                 state.nextIndex[event.FromId] = event.LastLogIndex + 1
             }
+
+            // Now send next batch of logs from nextIndex onwards
             if state.nextIndex[event.FromId] > state.PersistentLog.GetLastIndex()+1 {
                 state.log_error(3, "Next index of any node will never be grater than (last log index + 1) of the leader")
+            } else if state.nextIndex[event.FromId] <= state.PersistentLog.GetLastIndex() {
+                // Resend next batch of logs from the nextIndex to the end
+                prevLog := state.GetLogOf(state.nextIndex[event.FromId] - 1)
+                startIndex := state.nextIndex[event.FromId]
+                logs := state.getLogsFrom(startIndex)   // copy server.log from startIndex to the end to "logs"
+                event1 := AppendRequestEvent{
+                    FromId:       state.server_id,
+                    Term:         state.CurrentTerm,
+                    PrevLogIndex: prevLog.Index,
+                    PrevLogTerm:  prevLog.Term,
+                    Entries:      *logs,
+                    LeaderCommit: state.commitIndex}
+                action := SendAction{ToId: event.FromId, Event: event1}
+                actions = append(actions, action)
+                return actions
             }
-
-            // Resend all logs from the holes to the end
-            prevLog := state.GetLogOf(state.nextIndex[event.FromId]-1)
-            startIndex := state.nextIndex[event.FromId]
-            logs := state.getLogsFrom(startIndex)   // copy server.log from startIndex to the end to "logs"
-            event1 := AppendRequestEvent{
-                FromId:       state.server_id,
-                Term:         state.CurrentTerm,
-                PrevLogIndex: prevLog.Index,
-                PrevLogTerm:  prevLog.Term,
-                Entries:      *logs,
-                LeaderCommit: state.commitIndex}
-            action := SendAction{ToId: event.FromId, Event: event1}
-            actions = append(actions, action)
-            return actions
-        } else if event.LastLogIndex > state.matchIndex[event.FromId] {
+            // TODO:: decrease nextIndex here,
+            //
+        } else if state.matchIndex[event.FromId] < event.LastLogIndex {
             state.matchIndex[event.FromId] = event.LastLogIndex
             state.nextIndex[event.FromId] = event.LastLogIndex + 1
 
@@ -677,6 +702,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             for i := state.numberOfNodes / 2; i >= 0; i-- {
                 if sorted[i] > state.commitIndex && state.GetLogOf(sorted[i]).Term == state.CurrentTerm {
                     // Commit all not committed eligible entries
+                    state.log_info(3, "Commiting from index %v to %v", state.commitIndex + 1, sorted[i])
                     for k := state.commitIndex + 1; k <= sorted[i]; k++ {
                         action := CommitAction{
                             Log:  *state.GetLogOf(k),
@@ -691,7 +717,11 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
             }
         }
 
-        // continue flow to next case for server.currentTerm < event.term
+        // Don't send next batch of logs from nextIndex when reply is true,
+        // delaying append request only on false reply
+
+
+        // continue flow to next case for server.currentTerm > event.term
         fallthrough
     case CANDIDATE:
         fallthrough
@@ -727,7 +757,7 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
         heartbeatEvent := AppendRequestEvent{
             FromId:       state.server_id,
             Term:         state.CurrentTerm,
-            PrevLogIndex: state.getLastLog().Index,
+            PrevLogIndex: state.GetLastLogIndex(),
             PrevLogTerm:  state.getLastLog().Term,
             Entries:      []LogEntry{},
             LeaderCommit: state.commitIndex}
@@ -749,7 +779,7 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
         voteReq := RequestVoteEvent{
             FromId:       state.server_id,
             Term:         state.CurrentTerm,
-            LastLogIndex: state.getLastLog().Index,
+            LastLogIndex: state.GetLastLogIndex(),
             LastLogTerm:  state.getLastLog().Term}
         voteReqActions := state.broadcast(voteReq) // broadcast request vote event
         actions = append(actions, voteReqActions...)
@@ -768,12 +798,12 @@ func (state *StateMachine) appendClientRequest(event *[]AppendEvent) (actions []
 
     switch state.myState {
     case LEADER:
-        prevLogIndex := state.getLastLog().Index
+        prevLogIndex := state.GetLastLogIndex()
         prevLogTerm  := state.getLastLog().Term
 
         logs := []LogEntry{}
         for _, ev := range *event {
-            log := LogEntry{Index: state.getLastLog().Index + 1, Term: state.CurrentTerm, Data: ev.Data}
+            log := LogEntry{Index: state.GetLastLogIndex() + 1, Term: state.CurrentTerm, Data: ev.Data}
             state.PersistentLog.Append(log)
             logs = append(logs, log)
         }
@@ -786,7 +816,7 @@ func (state *StateMachine) appendClientRequest(event *[]AppendEvent) (actions []
             Entries:      logs,
             LeaderCommit: state.commitIndex}
                                // Append to self log
-        state.matchIndex[state.server_id] = state.getLastLog().Index    // Update self matchIndex
+        state.matchIndex[state.server_id] = state.GetLastLogIndex()    // Update self matchIndex
 
 
         actions = append(actions, state.broadcast(appendReq)...)

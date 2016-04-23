@@ -41,6 +41,8 @@ func TestRPCMain(t *testing.T) {
                                                     {Id: 4, Address: "localhost:7004"},
                                                     {Id: 5, Address: "localhost:7005"},
                                                 },
+                                                InboxSize:100000,
+                                                OutboxSize:100000,
                                             },
         ClientPorts      : []int{ 0, 9001, 9002, 9003, 9004, 9005},
         ServerList       : []string{
@@ -95,6 +97,7 @@ func expect(t *testing.T, response *fs.Msg, expected *fs.Msg, errstr string, err
 // any one clients' last write
 
 func TestRPC_ConcurrentWrites(t *testing.T) {
+    time.Sleep(1 * time.Second)
     nclients := 500
     niters := 10
     clients := make([]*client.Client, nclients)
@@ -148,6 +151,25 @@ func TestRPC_ConcurrentWrites(t *testing.T) {
     }
 }
 
+func TestRPC_Binary(t *testing.T) {
+    cl := client.New(baseConfig, 1)
+    if cl==nil {
+        t.Fatal("Client unable to connect.")
+    }
+    //cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
+    defer cl.Close()
+
+    // Write binary contents
+    data := "\x00\x01\r\n\x03" // some non-ascii, some crlf chars
+    m, err := cl.Write("binfile", data, 0)
+    expect(t, m, &fs.Msg{Kind: 'O'}, "write success", err)
+
+    // Expect to read it back
+    m, err = cl.Read("binfile")
+    expect(t, m, &fs.Msg{Kind: 'C', Contents: []byte(data)}, "read my write", err)
+
+}
+
 
 func TestRPC_BasicSequential(t *testing.T) {
     cl := client.New(baseConfig, 1)
@@ -199,25 +221,6 @@ func TestRPC_BasicSequential(t *testing.T) {
     // Expect to not find the file
     m, err = cl.Read("cs733net")
     expect(t, m, &fs.Msg{Kind: 'F'}, "file not found", err)
-}
-
-func TestRPC_Binary(t *testing.T) {
-    cl := client.New(baseConfig, 1)
-    if cl==nil {
-        t.Fatal("Client unable to connect.")
-    }
-    //cl := client.New("127.0.0.1:" + strconv.Itoa(clientHandlers[0].ClientPort), 1)
-    defer cl.Close()
-
-    // Write binary contents
-    data := "\x00\x01\r\n\x03" // some non-ascii, some crlf chars
-    m, err := cl.Write("binfile", data, 0)
-    expect(t, m, &fs.Msg{Kind: 'O'}, "write success", err)
-
-    // Expect to read it back
-    m, err = cl.Read("binfile")
-    expect(t, m, &fs.Msg{Kind: 'C', Contents: []byte(data)}, "read my write", err)
-
 }
 
 func TestRPC_Chunks(t *testing.T) {
