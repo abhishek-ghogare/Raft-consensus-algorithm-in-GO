@@ -9,6 +9,7 @@ import (
     "cs733/assignment4/logging"
     "cs733/assignment4/client_handler/filesystem/fs"
     "cs733/assignment4/raft_config"
+    "strings"
 )
 
 
@@ -52,7 +53,7 @@ func (cl *Client) setupConnectionToServer() {
         raddr, err := net.ResolveTCPAddr("tcp", cl.ServerList[i])
         if err == nil {
             var conn *net.TCPConn
-            cl.log_info(3, "Creating tcp connection to %v", cl.ServerList[i])
+            //cl.log_info(3, "Creating tcp connection to %v", cl.ServerList[i])
             conn, err = net.DialTCP("tcp", nil, raddr)
             if err == nil {
                 cl.conn = conn
@@ -103,7 +104,7 @@ func (cl *Client) Delete(filename string) (*fs.Msg, error) {
 
 
 func (cl *Client) Send(str string) error {
-    cl.log_info(3, "Sending : %v", str)
+    cl.log_info(3, "Sending : %v", strings.Replace(str,"\r\n", "", -1))
     if cl.conn == nil {
         return errNoConn
     }
@@ -179,7 +180,7 @@ func (cl *Client) Rcv() (msg *fs.Msg, err error) {
     // we will assume no errors in server side formatting
     line, err := cl.reader.ReadString('\n')
     if err == nil {
-        cl.log_info(3, "Received : %v", line)
+        cl.log_info(3, "Received : %v", strings.Replace(line,"\r\n", "", -1))
         msg, err, fatalerr = fs.PaserString(line)
         if err != nil {
             return nil, err

@@ -93,64 +93,6 @@ func expect(t *testing.T, response *fs.Msg, expected *fs.Msg, errstr string, err
 }
 
 
-// nclients write to the same file. At the end the file should be
-// any one clients' last write
-
-func TestRPC_ConcurrentWrites(t *testing.T) {
-    time.Sleep(1 * time.Second)
-    nclients := 500
-    niters := 10
-    clients := make([]*client.Client, nclients)
-    for i := 0 ; i < nclients ; i++ {
-        cl := client.New(baseConfig, i)
-        for cl==nil {
-            cl = client.New(baseConfig, i)
-        }
-        defer cl.Close()
-        clients[i] = cl
-    }
-
-    errCh := make(chan error, nclients)
-    var sem sync.WaitGroup // Used as a semaphore to coordinate goroutines to begin concurrently
-    sem.Add(1)
-    ch := make(chan *fs.Msg, nclients*niters) // channel for all replies
-    for i := 0; i < nclients; i++ {
-        go func(i int, cl *client.Client) {
-            sem.Wait()
-            for j := 0; j < niters; j++ {
-                str := fmt.Sprintf("cl %d %d", i, j)
-                m, err := cl.Write("concWrite", str, 0)
-                if err != nil {
-                    errCh <- err
-                    break
-                } else {
-                    ch <- m
-                }
-            }
-        }(i, clients[i])
-    }
-    time.Sleep(100 * time.Millisecond) // give goroutines a chance
-    sem.Done()                         // Go!
-
-    // There should be no errors
-    for i := 0; i < nclients*niters; i++ {
-        select {
-        case m := <-ch:
-            if m.Kind != 'O' {
-                t.Fatalf("Concurrent write failed with kind=%c", m.Kind)
-            }
-        case err := <- errCh:
-            t.Fatal(err)
-        }
-    }
-    m, _ := clients[0].Read("concWrite")
-    // Ensure the contents are of the form "cl <i> 9"
-    // The last write of any client ends with " 9"
-    if !(m.Kind == 'C' && strings.HasSuffix(string(m.Contents), " 9")) {
-        t.Fatalf("Expected to be able to read after 1000 writes. Got msg = %v", m)
-    }
-}
-
 func TestRPC_Binary(t *testing.T) {
     cl := client.New(baseConfig, 1)
     if cl==nil {
@@ -335,6 +277,64 @@ func TestRPC_BasicTimer(t *testing.T) {
 }
 
 
+// nclients write to the same file. At the end the file should be
+// any one clients' last write
+
+func TestRPC_ConcurrentWrites(t *testing.T) {
+    time.Sleep(1 * time.Second)
+    nclients := 500
+    niters := 10
+    clients := make([]*client.Client, nclients)
+    for i := 0 ; i < nclients ; i++ {
+        cl := client.New(baseConfig, i)
+        for cl==nil {
+            cl = client.New(baseConfig, i)
+        }
+        defer cl.Close()
+        clients[i] = cl
+    }
+
+    errCh := make(chan error, nclients)
+    var sem sync.WaitGroup // Used as a semaphore to coordinate go-routines to begin concurrently
+    sem.Add(1)
+    ch := make(chan *fs.Msg, nclients*niters) // channel for all replies
+    for i := 0; i < nclients; i++ {
+        go func(i int, cl *client.Client) {
+            sem.Wait()
+            for j := 0; j < niters; j++ {
+                str := fmt.Sprintf("cl %d %d", i, j)
+                m, err := cl.Write("concWrite", str, 0)
+                if err != nil {
+                    errCh <- err
+                    break
+                } else {
+                    ch <- m
+                }
+            }
+        }(i, clients[i])
+    }
+    time.Sleep(100 * time.Millisecond) // give goroutines a chance
+    sem.Done()                         // Go!
+
+    // There should be no errors
+    for i := 0; i < nclients*niters; i++ {
+        select {
+        case m := <-ch:
+            if m.Kind != 'O' {
+                t.Fatalf("Concurrent write failed with kind=%c", m.Kind)
+            }
+        case err := <- errCh:
+            t.Fatal(err)
+        }
+    }
+    m, _ := clients[0].Read("concWrite")
+    // Ensure the contents are of the form "cl <i> 9"
+    // The last write of any client ends with " 9"
+    if !(m.Kind == 'C' && strings.HasSuffix(string(m.Contents), " 9")) {
+        t.Fatalf("Expected to be able to read after 1000 writes. Got msg = %v", m)
+    }
+}
+
 // nclients cas to the same file. At the end the file should be any one clients' last write.
 // The only difference between this test and the ConcurrentWrite test above is that each
 // client loops around until each CAS succeeds. The number of concurrent clients has been
@@ -353,7 +353,7 @@ func TestRPC_ConcurrentCas(t *testing.T) {
         clients[i] = cl
     }
 
-    var sem sync.WaitGroup // Used as a semaphore to coordinate goroutines to *begin* concurrently
+    var sem sync.WaitGroup // Used as a semaphore to coordinate go-routines to *begin* concurrently
     sem.Add(1)
 
     m, _ := clients[0].Write("concCas", "first", 0)

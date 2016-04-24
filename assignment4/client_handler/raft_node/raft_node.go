@@ -258,7 +258,7 @@ func (rn *RaftNode) Shutdown() {
         return
     }
 
-    rn.log_info(4, "Shutting down")
+    rn.log_info(4, "Raft shutting down")
     rn.isUp = false
     rn.isInitialized = false
     rn.timer.Stop()

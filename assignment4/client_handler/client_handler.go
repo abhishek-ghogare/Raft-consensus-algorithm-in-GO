@@ -16,8 +16,11 @@ import (
     "encoding/gob"
 )
 
-const CONNECTION_TIMEOUT = 100 // in seconds
+const CONNECTION_TIMEOUT = 100*time.Second // in seconds
 
+/*
+ *  Debug tools
+ */
 func (chdlr *ClientHandler) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[CH:%v] ", chdlr.Raft.GetId()) + format
     logging.Error(skip, format, args...)
@@ -34,26 +37,35 @@ func (chdlr *ClientHandler) log_warning(skip int, format string, args ...interfa
 var crlf = []byte{'\r', '\n'}
 
 /*
- *  Request is replicated into raft nodes
+ *  Request, containing msg from client, is replicated into raft nodes
  */
 type Request struct {
-    ServerId int // Id of raft node on which the request has arrived
-    ReqId    int // Connection id, mapped into activeConn, from which request has arrived
-    Message  fs.Msg
+    ServerId int    // Id of raft node on which the request has arrived
+    ReqId    int    // Request id and wait channel, mapped into ActiveReq, used to send
+                    // replicated msg to correct tcp serve thread which is handling this request
+    Message  fs.Msg // Request from client
 }
 
 type ClientHandler struct {
     Raft             *raft_node.RaftNode
-    ActiveReq        map[int]chan fs.Msg
-    ActiveReqLock    sync.RWMutex
-    NextConnId       int
-    ClientPort       int     //Port on which the client handler will listen
+    ActiveReq        map[int]chan fs.Msg    // Mapping of request id to channel on which serve thread
+                                            // is waiting for the request to get replicated on raft nodes
+    ActiveReqLock    sync.RWMutex           // Lock on active requests map
+    NextReqId        int                    // Next request id available to be assigned to next request
+    ClientPort       int                    // Port on which the client handler will listen for client requests
     WaitOnServerExit sync.WaitGroup
-    MaxConcurrentClients chan int
+    ShutDownChan     chan int               // This channel is closed in shutdown to force all threads to stop
 }
 
-func New(Id int, config *raft_config.Config, restore bool) (ch *ClientHandler) {
+/***
+ *  Create client handler
+ *  # Id        : Id of the raft node
+ *  # config    : Raft node config
+ *  # restore   : Whether to clean start or resume from last crash point
+ */
+func New(Id int, config *raft_config.Config, restore bool) (chd *ClientHandler) {
 
+    // Register the structures to gob
     gob.Register(fs.Msg{})
     gob.Register(Request{})
     gob.Register(rsm.AppendRequestEvent{})
@@ -64,95 +76,233 @@ func New(Id int, config *raft_config.Config, restore bool) (ch *ClientHandler) {
     gob.Register(rsm.AppendEvent{})
     gob.Register(rsm.LogEntry{})
 
-    ch = &ClientHandler{
-        ActiveReq   : make(map[int]chan fs.Msg),
-        NextConnId  : 0,
-        ClientPort  : config.ClientPorts[Id] }
-
+    // Create/restore raft node based on command line parameter
+    var raft *raft_node.RaftNode
     if restore {
-        ch.Raft = raft_node.RestoreServerState(Id, config)
+        raft = raft_node.RestoreServerState(Id, config)
     } else {
-        ch.Raft = raft_node.NewRaftNode(Id, config)
+        raft = raft_node.NewRaftNode(Id, config)
     }
 
-    return ch
+    // Create client handler
+    chd = &ClientHandler{
+        Raft        : raft,
+        ActiveReq   : make(map[int]chan fs.Msg),
+        NextReqId   : 0,
+        ClientPort  : config.ClientPorts[Id],
+        ShutDownChan: make(chan int) }
+
+    return chd
 }
 
-func (ch *ClientHandler) Start() {
-    // Done will be called twice, once in handleCommits and once in Start
-    ch.WaitOnServerExit.Add(2)
-    ch.MaxConcurrentClients = make(chan int, 200)
-    for i:=1; i<200 ; i++ {
-        ch.MaxConcurrentClients<-0
+/***
+ *  Asynchronously start client handler
+ */
+func (chd *ClientHandler) Start() {
+    chd.Raft.Start()
+
+    // Error checking function
+    checkError := func (obj interface{}) {
+        if obj != nil {
+            chd.log_error(3, "Error occurred : %v", obj)
+            os.Exit(1)
+        }
     }
 
-    ch.Raft.Start()
+    tcp_addr, err := net.ResolveTCPAddr("tcp", ":"+strconv.Itoa(chd.ClientPort))
+    checkError(err)
+    tcp_acceptor, err := net.ListenTCP("tcp", tcp_addr)
+    checkError(err)
 
-    tcpaddr, err := net.ResolveTCPAddr("tcp", ":"+strconv.Itoa(ch.ClientPort))
-    ch.check(err)
-    tcp_acceptor, err := net.ListenTCP("tcp", tcpaddr)
-    ch.check(err)
-
-    ch.log_info(3, "Starting handle commits thread")
-    go ch.handleCommits()
-
-    ch.log_info(3, "Starting loop to handle tcp connections")
+    chd.log_info(3, "Starting commit handler")
     go func () {
-        for {
-            // TODO:: how are we exiting from this?
-            tcp_conn, err := tcp_acceptor.AcceptTCP()
-            ch.check(err)
+        // Make sync start function to wait on this thread
+        chd.WaitOnServerExit.Add(1)
+        defer chd.WaitOnServerExit.Done()
 
-            //<-ch.MaxConcurrentClients // Wait on client ticket
-            go ch.serve(tcp_conn)
+        HandlerLoop:
+        for {
+            select {
+            case commitAction, ok := <-chd.Raft.CommitChannel:
+                if ok {
+                    chd.handleCommit(commitAction)
+                } else {
+                    // Raft node closed
+                    break HandlerLoop
+                }
+            case <-chd.ShutDownChan:
+                // Wait on shutdown channel
+                break HandlerLoop
+            }
         }
-        ch.WaitOnServerExit.Done()
+
+        chd.log_info(3, "Raft node shutdown, exiting commit handler thread")
+    }()
+
+    chd.log_info(3, "Starting client listener")
+    go func () {
+        // Make sync start function to wait on this thread
+        chd.WaitOnServerExit.Add(1)
+        defer chd.WaitOnServerExit.Done()
+
+        for {
+            select {
+            case <-chd.ShutDownChan:
+                chd.log_info(3, "Raft node shutdown, exiting client listener thread")
+                return
+            default:
+                tcp_acceptor.SetDeadline(time.Now().Add(time.Second*2))  // Listen on socket for 2 sec, then check if shutdown
+                tcp_conn, err := tcp_acceptor.AcceptTCP()
+                if nil != err {
+                    if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
+                        continue
+                    }
+                }
+                checkError(err)
+
+                chd.WaitOnServerExit.Add(1)     // Make sync start function to wait on every serve thread
+                go chd.serveClient(tcp_conn)    // Start serve thread
+            }
+        }
     }()
 }
 
-func (ch *ClientHandler) StartSync() {
-    ch.Start()
-    ch.WaitOnServerExit.Wait()
+
+/***
+ *  Synchronously start client handler, wait for all threads to exit
+ */
+func (chd *ClientHandler) StartSync() {
+    chd.Start()
+    chd.WaitOnServerExit.Wait()
 }
 
-// Add a connection to active request queue and returns request id
-func (ch *ClientHandler) RegisterRequest() (reqId int, waitChan chan fs.Msg) {
-    waitChan = make(chan fs.Msg)
-    ch.ActiveReqLock.Lock()
-    ch.NextConnId++
-    connId := ch.NextConnId
-    ch.ActiveReq [ connId ] = waitChan
-    ch.ActiveReqLock.Unlock()
-    return connId, waitChan
+
+/***
+ *  Serve a client connection
+ */
+func (chd *ClientHandler) serveClient(conn *net.TCPConn) {
+    defer chd.WaitOnServerExit.Done()
+
+    reader := bufio.NewReader(conn)
+    for {
+        msg, msgerr, fatalerr := fs.GetMsg(reader)
+        if fatalerr != nil {
+            if (!chd.replyToClient(conn, &fs.Msg{Kind: 'M'})) {
+                chd.log_error(3, "Reply to client was not sucessful : %v, %v", msgerr, fatalerr)
+            }
+            conn.Close()
+            return
+        }
+
+        //Replicate msg and after receiving at commitChannel, ProcessMsg(msg)
+        reqId, waitChan := chd.RegisterRequest()
+
+
+        // Send request to replicate
+        request := Request{ServerId:chd.Raft.GetId(), ReqId:reqId, Message:*msg}
+        chd.Raft.Append(request)
+
+
+        // Wait for replication to happen
+        select {
+        case response := <-waitChan:
+            chd.DeregisterRequest(reqId)                // First deregister the request
+
+            if !chd.replyToClient(conn, &response) {    // Reply to client with response
+                chd.log_error(3, "Reply to client was not sucessful")
+                conn.Close()
+                return
+            }
+        case  <- time.After(CONNECTION_TIMEOUT) :
+            chd.DeregisterRequest(reqId)
+
+            chd.log_error(3, "Connection timed out, closing the connection")
+            chd.replyToClient(conn, &fs.Msg{Kind:'I'})  // Reply with internal error
+            conn.Close()
+            return
+        }
+    }
 }
-// Remove request from active requests
-func (ch *ClientHandler) DeregisterRequest(connId int) {
-    ch.ActiveReqLock.Lock()
-    close(ch.ActiveReq[connId])
-    delete(ch.ActiveReq, connId)
-    ch.ActiveReqLock.Unlock()
-}
-func (ch *ClientHandler) SendToWaitCh (connId int, msg fs.Msg) {
-    ch.ActiveReqLock.RLock()
-    conn, ok := ch.ActiveReq[connId]
-    if ok {
-        conn <- msg
+
+
+/***
+ *  Handle commit action received on commit channel of raft.
+ *
+ *  Applies commited request to file system, generates the response,
+ *  sends the response to appropriate client serve thread only if
+ *  the request was made to this server.
+ */
+func (chd *ClientHandler) handleCommit (commitAction rsm.CommitAction) {
+    var response *fs.Msg
+
+    request := commitAction.Log.Data.(Request)
+
+    if commitAction.Err == nil {                        // Check if replication was successful
+        response = fs.ProcessMsg(&request.Message)      // Apply request to state machine, i.e. Filesystem
     } else {
-        ch.log_error(4, "No connection found for reqId %v", connId)
+        switch commitAction.Err.(type) {
+        case rsm.Error_Commit:                          // Unable to commit, internal error
+            response = &fs.Msg{Kind:'I'}
+        case rsm.Error_NotLeader:                       // Not a leader, redirect error
+            errorNotLeader := commitAction.Err.(rsm.Error_NotLeader)
+            response = &fs.Msg{
+                Kind            : 'R',
+                RedirectAddr    : chd.Raft.ServerList[ errorNotLeader.LeaderId ] }
+        default:
+            chd.log_error(3, "Unknown error type : %v", commitAction.Err)
+        }
     }
-    ch.ActiveReqLock.RUnlock()
+
+    chd.Raft.UpdateLastApplied(commitAction.Log.Index)  // Update last applied
+
+    // Reply only if the client has requested this server
+    if request.ServerId == chd.Raft.GetId() {
+        chd.SendToWaitCh(request.ReqId, *response)      // Send response to corresponding serve thread
+    }
 }
 
 
-func (ch *ClientHandler) check(obj interface{}) {
-    if obj != nil {
-        ch.log_error(3, "Error occurred : %v", obj)
-        fmt.Println(obj)
-        os.Exit(1)
-    }
+/***
+ *  Request Reqistration and Deregistration
+ *
+ */
+
+// Register client request and returns request id
+func (chd *ClientHandler) RegisterRequest() (reqId int, waitChan chan fs.Msg) {
+    waitChan = make(chan fs.Msg)
+    chd.ActiveReqLock.Lock()
+    chd.NextReqId++
+    reqId = chd.NextReqId
+    chd.ActiveReq [ reqId ] = waitChan
+    chd.ActiveReqLock.Unlock()
+    return reqId, waitChan
 }
 
-func (ch *ClientHandler) reply(conn *net.TCPConn, msg *fs.Msg) bool {
+// Deregister client request corresponding to request id
+func (chd *ClientHandler) DeregisterRequest(reqId int) {
+    chd.ActiveReqLock.Lock()
+    close(chd.ActiveReq[reqId])
+    delete(chd.ActiveReq, reqId)
+    chd.ActiveReqLock.Unlock()
+}
+
+// Send msg to the serve thread waiting for the request to get replicated
+func (chd *ClientHandler) SendToWaitCh (reqId int, msg fs.Msg) {
+    chd.ActiveReqLock.RLock()
+    conn, ok := chd.ActiveReq[reqId]    // Extract wait channel from map
+    if ok {                             // If request was not de-registered due to timeout
+        conn <- msg
+    } else {                            // Request was de-registered
+        chd.log_error(4, "No connection found for reqId %v", reqId)
+    }
+    chd.ActiveReqLock.RUnlock()
+}
+
+
+/***
+ *  Reply to client tcp connection with the given msg
+ */
+func (chd *ClientHandler) replyToClient(conn *net.TCPConn, msg *fs.Msg) bool {
     var err error
     write := func(data []byte) {
         if err != nil {
@@ -180,7 +330,7 @@ func (ch *ClientHandler) reply(conn *net.TCPConn, msg *fs.Msg) bool {
     case 'R': // redirect addr of leader
         resp = fmt.Sprintf("ERR_REDIRECT %v", msg.RedirectAddr)
     default:
-        ch.log_error(3, "Unknown response kind '%c', of msg : %+v", msg.Kind, msg)
+        chd.log_error(3, "Unknown response kind '%c', of msg : %+v", msg.Kind, msg)
         return false
     }
     resp += "\r\n"
@@ -192,97 +342,12 @@ func (ch *ClientHandler) reply(conn *net.TCPConn, msg *fs.Msg) bool {
     return err == nil
 }
 
-func (ch *ClientHandler) serve(conn *net.TCPConn) {
-    //defer func() { ch.MaxConcurrentClients<-0 }()    // Give next client the ticket
 
-    reader := bufio.NewReader(conn)
-    for {
-        msg, msgerr, fatalerr := fs.GetMsg(reader)
-        if fatalerr != nil {
-            if (!ch.reply(conn, &fs.Msg{Kind: 'M'})) {
-                ch.log_error(3, "Reply to client was not sucessful : %v, %v", msgerr, fatalerr)
-            }
-            conn.Close()
-            return
-        }
-
-        //ch.log_info(3, "Request received from client : %+v", *msg)
-        /***
-         *      Replicate msg and after receiving at commitChannel, ProcessMsg(msg)
-         */
-
-        reqId, waitChan := ch.RegisterRequest()
-        defer ch.DeregisterRequest(reqId)
-
-        request := Request{ServerId:ch.Raft.GetId(), ReqId:reqId, Message:*msg}
-        // Send request to replicate
-        ch.Raft.Append(request)
-
-
-        // Wait for replication to happen
-        select {
-        case response := <-waitChan:
-            // Reply to client with response
-            if !ch.reply(conn, &response) {
-                ch.log_error(3, "Reply to client was not sucessful")
-                conn.Close()
-                return
-            }
-        case  <- time.After(CONNECTION_TIMEOUT*time.Second) :
-            // Connection timed out
-            ch.log_error(3, "Connection timed out, closing the connection")
-            ch.reply(conn, &fs.Msg{Kind:'I'})
-            conn.Close()
-            return
-        }
-    }
-}
-
-func (chdlr *ClientHandler) handleCommits() {
-    for {
-        commitAction, ok := <- chdlr.Raft.CommitChannel
-        if ok {
-            var response *fs.Msg
-
-            request := commitAction.Log.Data.(Request)
-
-            // Check if replication was successful
-            if commitAction.Err == nil {
-                // Apply request to state machine, i.e. Filesystem
-                 //chdlr.log_info(3, "Applying request to file system : %+v", request)
-                response = fs.ProcessMsg(&request.Message)          // TODO, this is global file system,
-            } else {
-                switch commitAction.Err.(type) {
-                case rsm.Error_Commit:                  // unable to commit, internal error
-                    response = &fs.Msg{Kind:'I'}
-                case rsm.Error_NotLeader:               // not a leader, redirect error
-                    errorNotLeader := commitAction.Err.(rsm.Error_NotLeader)
-                    response = &fs.Msg {
-                                            Kind            : 'R',
-                                            RedirectAddr    : chdlr.Raft.ServerList[ errorNotLeader.LeaderId ] }
-                default:
-                    chdlr.log_error(3, "Unknown error type : %v", commitAction.Err)
-                }
-            }
-
-            // update last applied
-            chdlr.Raft.UpdateLastApplied(commitAction.Log.Index)
-
-            // Reply only if the client has requested this server
-            if request.ServerId == chdlr.Raft.GetId() {
-                chdlr.SendToWaitCh(request.ReqId, *response)
-            }
-        } else {
-            // Raft node closed
-            chdlr.log_info(3, "Raft node shutdown, exiting handleCommits")
-            chdlr.WaitOnServerExit.Done()
-            return
-        }
-    }
-}
-
-
-func (ch *ClientHandler) Shutdown() {
-    ch.log_info(3, "Client handler shuting down")
-    ch.Raft.Shutdown()
+/***
+ *  Shutdown raft, commit handler thread and client listener thread
+ */
+func (chd *ClientHandler) Shutdown() {
+    chd.log_info(3, "Client handler shuting down")
+    close(chd.ShutDownChan)     // Shutdown commit handler and client listener threads
+    chd.Raft.Shutdown()         // Shutdown raft node
 }
