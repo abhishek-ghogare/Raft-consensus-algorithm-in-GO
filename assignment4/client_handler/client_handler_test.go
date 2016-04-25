@@ -19,7 +19,7 @@ import (
 var clientHandlers []*ClientHandler
 var baseConfig *raft_config.Config
 
-func TestRPCMain(t *testing.T) {
+func TestCHDMain(t *testing.T) {
     var err error
 
     os.RemoveAll("/tmp/raft/")
@@ -93,7 +93,7 @@ func expect(t *testing.T, response *fs.Msg, expected *fs.Msg, errstr string, err
 }
 
 
-func TestRPC_Binary(t *testing.T) {
+func TestCHD_Binary(t *testing.T) {
     cl := client.New(baseConfig, 1)
     if cl==nil {
         t.Fatal("Client unable to connect.")
@@ -113,7 +113,7 @@ func TestRPC_Binary(t *testing.T) {
 }
 
 
-func TestRPC_BasicSequential(t *testing.T) {
+func TestCHD_BasicSequential(t *testing.T) {
     cl := client.New(baseConfig, 1)
     if cl==nil {
         t.Fatal("Client unable to connect.")
@@ -165,59 +165,7 @@ func TestRPC_BasicSequential(t *testing.T) {
     expect(t, m, &fs.Msg{Kind: 'F'}, "file not found", err)
 }
 
-func TestRPC_Chunks(t *testing.T) {
-    // Should be able to accept a few bytes at a time
-
-    cl := client.New(baseConfig, 1)
-    if cl==nil {
-        t.Fatal("Client unable to connect.")
-    }
-    defer cl.Close()
-
-    var err error
-    snd := func(chunk string) {
-        if err == nil {
-            err = cl.Send(chunk)
-        }
-    }
-
-    // Send the command "write teststream 10\r\nabcdefghij\r\n" in multiple chunks
-    // Nagle's algorithm is disabled on a write, so the server should get these in separate TCP packets.
-    snd("wr")
-    time.Sleep(10 * time.Millisecond)
-    snd("ite test")
-    time.Sleep(10 * time.Millisecond)
-    snd("stream 1")
-    time.Sleep(10 * time.Millisecond)
-    snd("0\r\nabcdefghij\r")
-    time.Sleep(10 * time.Millisecond)
-    snd("\n")
-    var m *fs.Msg
-    m, err = cl.Rcv()
-    expect(t, m, &fs.Msg{Kind: 'O'}, "writing in chunks should work", err)
-}
-
-func TestRPC_Batch(t *testing.T) {
-    // Send multiple commands in one batch, expect multiple responses
-    cl := client.New(baseConfig, 1)
-    if cl==nil {
-        t.Fatal("Client unable to connect.")
-    }
-    defer cl.Close()
-    cmds := "write batch1 3\r\nabc\r\n" +
-    "write batch2 4\r\ndefg\r\n" +
-    "read batch1\r\n"
-
-    cl.Send(cmds)
-    m, err := cl.Rcv()
-    expect(t, m, &fs.Msg{Kind: 'O'}, "write batch1 success", err)
-    m, err = cl.Rcv()
-    expect(t, m, &fs.Msg{Kind: 'O'}, "write batch2 success", err)
-    m, err = cl.Rcv()
-    expect(t, m, &fs.Msg{Kind: 'C', Contents: []byte("abc")}, "read batch1", err)
-}
-
-func TestRPC_BasicTimer(t *testing.T) {
+func TestCHD_BasicTimer(t *testing.T) {
     cl := client.New(baseConfig, 1)
     if cl==nil {
         t.Fatal("Client unable to connect.")
@@ -276,11 +224,17 @@ func TestRPC_BasicTimer(t *testing.T) {
 
 }
 
+func TestCHD_RestartAll(t *testing.T) {
+    TestCHDEnd(t)
+    //time.Sleep(time.Second*5)
+    clientHandlers = []*ClientHandler{}
+    TestCHDMain(t)
+}
 
 // nclients write to the same file. At the end the file should be
 // any one clients' last write
 
-func TestRPC_ConcurrentWrites(t *testing.T) {
+func TestCHD_ConcurrentWrites(t *testing.T) {
     time.Sleep(1 * time.Second)
     nclients := 500
     niters := 10
@@ -339,7 +293,7 @@ func TestRPC_ConcurrentWrites(t *testing.T) {
 // The only difference between this test and the ConcurrentWrite test above is that each
 // client loops around until each CAS succeeds. The number of concurrent clients has been
 // reduced to keep the testing time within limits.
-func TestRPC_ConcurrentCas(t *testing.T) {
+func TestCHD_ConcurrentCas(t *testing.T) {
     nclients := 100
     niters := 10
 
@@ -407,7 +361,7 @@ func TestRPC_ConcurrentCas(t *testing.T) {
 
 
 
-func TestRPCEnd(t *testing.T) {
+func TestCHDEnd(t *testing.T) {
     for i:=0 ; i < 5 ; i++ {
         // Start client handler
         clientHandlers[i].Shutdown()

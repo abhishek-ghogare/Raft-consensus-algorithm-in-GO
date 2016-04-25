@@ -235,9 +235,9 @@ func (rafts Rafts) checkSingleCommit(t *testing.T, data interface{}) error{
                             }
                             checked[i] = true // Ignore from future consideration
                             checkedNum++
-                            if ci.Log.Data != data {
+                            if ci.Data != data {
                                 rafts.shutdownRafts()
-                                t.Fatalf("Got different data : expected %v , received : %v", data, ci.Log.Data)
+                                t.Fatalf("Got different data : expected %v , received : %v", data, ci.Data)
                             }
                         default:
                         }

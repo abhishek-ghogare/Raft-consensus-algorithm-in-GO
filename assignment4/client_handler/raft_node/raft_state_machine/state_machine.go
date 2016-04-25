@@ -5,7 +5,6 @@ import (
     "fmt"
     "github.com/cs733-iitb/log"
     "math/rand"
-    "sort"
     "strconv"
     "reflect"
 )
@@ -37,8 +36,8 @@ const (
     FOLLOWER
     LEADER
 )
-const RandomTimeout = 1000
-const BATCHSIZE = 100 // Send logs to followers in batches of 200
+const RandomTimeout = 1000  // Random timeout extra to election timeout
+const BATCHSIZE = 50        // Send logs to followers in batches
 
 type LogEntry struct {
     Term  int
@@ -102,10 +101,9 @@ type SendAction struct {
 // Data goes in via Append, comes out as CommitInfo from the node's CommitChannel
 // Index is valid only if err == nil
 type CommitAction struct {
-    // Removing Index, since it is not used
-    //Index int // for error, set to -1
-    Log LogEntry    // TODO::use data of type interface here and index outside
-    Err error
+    Index   int64
+    Data    interface{}
+    Err     error
 }
 type Error_Commit struct {}
 func (err Error_Commit) Error() string {
@@ -121,16 +119,6 @@ func (err Error_NotLeader) Error() string{
         return "This server is not a leader, current leader is unknown"
     }
 }
-
-/*
- *  Removing log store action, since we are storing directly into persistent store
- */
-// type LogStore LogEntry
-/*
-type LogStore struct {
-    Index int
-    Data  LogEntry // Data is of LogEntry type
-}*/
 
 // Store state machine on persistent store
 type StateStore struct {
@@ -150,7 +138,7 @@ type StateMachine struct {
                              // Persistent state
     CurrentTerm   int
     VotedFor      int        // -1: not voted
-    LastApplied   int64      // Updated by client handler when the log is applied to its state machine // TODO:: update changes for this
+    LastApplied   int64      // Updated by client handler when the log is applied to its state machine
     numberOfNodes int
 
                              // log is initialised with single dummy log, to make life easier in future checking
@@ -174,7 +162,7 @@ type StateMachine struct {
     ElectionTimeout  int
     HeartbeatTimeout int
 
-                             /**
+                 /**
 			      *      Few assumptions and implementation according :
 			      *      1.  All the logs in memory and also on persistent store are has strictly increasing order of indices with
 			      *          the difference of 1.
@@ -203,18 +191,18 @@ func (state *StateMachine) GetStateStoreAction() StateStore {
  */
 //  Returns last log entry
 func (state *StateMachine) getLastLog() *LogEntry {
-    log := state.GetLogOf(state.PersistentLog.GetLastIndex())
+    log := state.GetLogAt(state.PersistentLog.GetLastIndex())
     return log
 }
 func (state *StateMachine) GetLastLogIndex() int64 {
     return state.PersistentLog.GetLastIndex()
 }
-func (state *StateMachine) GetLastLogTerm() int { // TODO:: use this
+func (state *StateMachine) GetLastLogTerm() int {
     log, _ := state.PersistentLog.Get(state.PersistentLog.GetLastIndex())
     return log.(LogEntry).Term
 }
 //  Return log of given index
-func (state *StateMachine)GetLogOf(index int64) *LogEntry {
+func (state *StateMachine)GetLogAt(index int64) *LogEntry {
     l, e := state.PersistentLog.Get(index)
     if e!=nil {
         state.log_error(5, "Persistent log access error : %v : last index:%v  | accessed index:%v", e.Error(), state.PersistentLog.GetLastIndex(), index)
@@ -298,441 +286,6 @@ func (state *StateMachine) initialiseLeader() {
 
 /********************************************************************
  *                                                                  *
- *                          Vote Request                            *
- *                                                                  *
- ********************************************************************/
-func (state *StateMachine) voteRequest(event RequestVoteEvent) (actions []interface{}) {
-
-    actions = make([]interface{}, 0)
-
-    // Track if persistent state of raft state machine changes
-    state_changed_flag := false
-    // Check and store state on persistent store
-    defer func() {
-        if state_changed_flag {
-            // Prepend StateStore action
-            actions = append(actions, state.GetStateStoreAction())
-        }
-    }()
-
-    if event.Term < state.CurrentTerm {
-        // In any state, if old termed candidate request vote, tell it to be a follower
-        voteResp := RequestVoteRespEvent{FromId: state.server_id, Term: state.CurrentTerm, VoteGranted: false}
-        resp := SendAction{ToId: event.FromId, Event: voteResp}
-        actions = append(actions, resp)
-        return actions
-    } else if event.Term > state.CurrentTerm {
-        // Request from more up-to-date node, so lets update our state
-        state.CurrentTerm = event.Term
-        state.myState = FOLLOWER
-        state.VotedFor = -1
-        state_changed_flag = true
-    }
-
-    // requester_term >= server.current_term
-    // If not voted for this term
-    if state.VotedFor == -1 {
-        // votedFor will be -1 ONLY for follower state, in case of leader/candidate it will be set to self id
-        if event.LastLogTerm > state.getLastLog().Term || event.LastLogTerm == state.getLastLog().Term && event.LastLogIndex >= state.GetLastLogIndex() {
-            state.VotedFor = event.FromId
-            state.CurrentTerm = event.Term
-            state_changed_flag = true
-
-            voteResp := RequestVoteRespEvent{FromId: state.server_id, Term: state.CurrentTerm, VoteGranted: true}
-            resp := SendAction{ToId: event.FromId, Event: voteResp}
-            actions = append(actions, resp)
-            return actions
-        }
-    } else {
-        // If voted for this term, check if request is from same candidate for which this node has voted
-        if state.VotedFor == event.FromId {
-            // Vote again to same candidate
-            voteResp := RequestVoteRespEvent{FromId: state.server_id, Term: state.CurrentTerm, VoteGranted: true}
-            resp := SendAction{ToId: event.FromId, Event: voteResp}
-            actions = append(actions, resp)
-            return actions
-        }
-    }
-
-    // For already voted for same term to different candidate,
-    // Or not voted but requester's logs are old,
-    // reject all requests
-    voteResp := RequestVoteRespEvent{FromId: state.server_id, Term: state.CurrentTerm, VoteGranted: false}
-    resp := SendAction{ToId: event.FromId, Event: voteResp}
-    actions = append(actions, resp)
-    return actions
-}
-
-/********************************************************************
- *                                                                  *
- *                      Vote Request Response                       *
- *                                                                  *
- ********************************************************************/
-func (state *StateMachine) voteRequestResponse(event RequestVoteRespEvent) (actions []interface{}) {
-
-    actions = make([]interface{}, 0)
-
-    // Track if persistent state of raft state machine changes
-    state_changed_flag := false
-    // Check and store state on persistent store
-    defer func() {
-        if state_changed_flag {
-            // Prepend StateStore action
-            actions = append(actions, state.GetStateStoreAction())
-        }
-    }()
-
-    if state.CurrentTerm < event.Term {
-        // This server term is not so up-to-date, so update
-        state.myState = FOLLOWER
-        state.CurrentTerm = event.Term
-        state.VotedFor = -1
-        state_changed_flag = true
-
-        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
-        actions = append(actions, alarm)
-        return actions
-    } else if state.CurrentTerm > event.Term {
-        // Simply drop the response
-        return actions
-    }
-
-    switch state.myState {
-    case LEADER, FOLLOWER:
-        return actions
-
-    case CANDIDATE:
-        // Refer comments @ receivedVote declaration
-        // If vote received from a node, we are storing the term in receivedVote array for which the vote has received.
-        // This way we don't need to reinitialise the voted for array every time new election starts
-        vote := state.receivedVote[event.FromId]
-        if vote < 0 {
-            vote = -vote
-        }
-
-        if vote < event.Term {
-            if event.VoteGranted {
-                state.receivedVote[event.FromId] = event.Term
-            } else {
-                state.receivedVote[event.FromId] = -event.Term
-            }
-            count := 0
-            ncount := 0
-            for _, vote := range state.receivedVote {
-                if vote == event.Term {
-                    count++
-                } else if vote == -event.Term {
-                    ncount++
-                }
-            }
-            //fmt.Printf("eventTerm:%v\n COUNTING : %v : %v : %v\n",event.term, count,ncount, server.receivedVote)
-
-            if ncount > state.numberOfNodes/2 {
-                // majority of -ve votes, so change to follower
-                state.myState = FOLLOWER
-                return actions
-            } else if count > state.numberOfNodes/2 {
-                // become leader
-
-                state.currentLdr = state.GetServerId()  // update current leader
-                state.log_info(3, "Leader has been elected : %v", state.server_id)
-                state.initialiseLeader()
-
-                appendReq := AppendRequestEvent{
-                    FromId:       state.server_id,
-                    Term:         state.CurrentTerm,
-                    PrevLogIndex: state.GetLastLogIndex(),
-                    PrevLogTerm:  state.getLastLog().Term,
-                    Entries:      []LogEntry{},
-                    LeaderCommit: state.commitIndex}
-
-                alarm := AlarmAction{Time: state.HeartbeatTimeout}
-                actions = append(actions, alarm)
-                appendReqActions := state.broadcast(appendReq)
-                actions = append(actions, appendReqActions...)
-            }
-        }
-    }
-
-    return actions
-}
-
-/********************************************************************
- *                                                                  *
- *                          Append Request                          *
- *                                                                  *
- ********************************************************************/
-func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []interface{}) {
-    actions = make([]interface{}, 0)
-
-    // Track if persistent state of raft state machine changes
-    state_changed_flag := false
-    // Check and store state on persistent store
-    defer func() {
-        if state_changed_flag {
-            // Prepend StateStore action
-            state.log_info(3, "Appending state store action")
-            actions = append(actions, state.GetStateStoreAction())
-        }
-    }()
-
-
-    if state.CurrentTerm > event.Term {
-        // Append request is not from latest leader
-        // In all states applicable
-        appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: state.CurrentTerm, Success: false, LastLogIndex: state.GetLastLogIndex()}
-        resp := SendAction{ToId: event.FromId, Event: appendResp}
-        actions = append(actions, resp)
-        return actions
-    }
-
-    switch state.myState {
-    case LEADER:
-        // mystate == leader && term == currentTerm, this is impossible, as two leaders will never be elected at any term
-        if event.Term == state.CurrentTerm {
-            appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: -1, Success: false, LastLogIndex: state.GetLastLogIndex()}
-            resp := SendAction{ToId: event.FromId, Event: appendResp}
-            actions = append(actions, resp)
-            return actions
-        }
-        // continue flow to next case for server.currentTerm < event.term
-        fallthrough
-    case CANDIDATE:
-        // Convert to follower if current state is candidate/leader
-        state.myState = FOLLOWER
-        // continue flow to next case
-        fallthrough
-    case FOLLOWER:
-        // Reset heartbeat timeout
-        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
-        actions = append(actions, alarm)
-
-        // Check term
-        if state.CurrentTerm < event.Term {
-            // This server term is not so up-to-date, so update
-            state.CurrentTerm = event.Term
-            state.VotedFor = -1
-            state_changed_flag = true
-        }
-
-        // Check if the requester is leader
-        if state.CurrentTerm == event.Term {
-            state.currentLdr = event.FromId     // current leader is the one from whom msg received
-        }
-
-        // HERTBEAT check disabled
-        // It was preventing check for changed commitIndex,
-        // resulting this server not committing new entries which are committed by leader
-        /*
-           // Not required to check the last log index for heartbeat event
-           if len(event.Entries) == 0 {
-               // Empty log entries for heartbeat
-               appendResp := appendRequestRespEvent{FromId:server.server_id, Term:server.currentTerm, Success:true, LastLogIndex:server.GetLastLogIndex()}
-               resp := sendAction{toId:event.FromId, event:appendResp}
-               actions = append(actions, resp)
-               return actions
-           }*/
-
-        // Check if previous entries are missing
-        if state.GetLastLogIndex()                 <   event.PrevLogIndex ||
-           state.GetLogOf(event.PrevLogIndex).Term  !=  event.PrevLogTerm {
-            // Prev msg index,term doesn't match, i.e. missing previous entries, force leader to send previous entries
-            appendResp := AppendRequestRespEvent{FromId: state.server_id, Term: state.CurrentTerm, Success: false, LastLogIndex: state.GetLastLogIndex()}
-            resp := SendAction{ToId: event.FromId, Event: appendResp}
-            actions = append(actions, resp)
-            return actions
-        }
-
-
-        logsToAppend := event.Entries
-
-        // remove logs from logsToAppend which are present in our logs
-        for len(logsToAppend)       >   0 &&                                        // logs to append is non empty list
-            state.GetLastLogIndex() >=  logsToAppend[0].Index &&                    // if there is still intersection between our logs and logs to append
-            logsToAppend[0].Term    ==  state.GetLogOf(logsToAppend[0].Index).Term {// if term match -> logs match -> we have this log
-            logsToAppend = logsToAppend[1:]                                         // skip matched log
-        }
-
-        // Check if we have outdated/garbage logs
-        if len(logsToAppend)>0 && state.GetLastLogIndex() >= logsToAppend[0].Index {
-            // There are entries from last leaders
-            // truncate them up to the end
-            state.log_info(3, "Extra logs found, PrevLogIndex was %v, trucating logs from %v to %v", event.PrevLogIndex, logsToAppend[0].Index, state.GetLastLogIndex())
-            truncatedLogs := state.truncateLogsFrom(logsToAppend[0].Index)
-            for _, log := range *truncatedLogs {
-                action := CommitAction{Log: log, Err: Error_Commit{}}
-                actions = append(actions, action)
-            }
-        }
-
-        // Update log if entries are not present
-        for _, log := range logsToAppend {
-            state.PersistentLog.Append(log)
-        }
-
-        if event.LeaderCommit > state.commitIndex {
-            var commitFrom, commitUpto int64
-            // If leader has commited entries, so should this server
-            if event.LeaderCommit <= state.GetLastLogIndex() {
-                commitFrom = state.commitIndex + 1
-                commitUpto = event.LeaderCommit
-            } else {
-                commitFrom = state.commitIndex + 1
-                commitUpto = state.GetLastLogIndex()
-            }
-
-            // Loads logs from persistent store from commitIndex to end if not in in-memory logs
-            state.commitIndex = commitUpto
-
-            // Commit all logs from commitFrom to commitUpto
-            state.log_info(3, "Commiting from index %v to %v", commitFrom, commitUpto)
-            for i := commitFrom; i <= commitUpto; i++ {
-                action := CommitAction{Log: *state.GetLogOf(i), Err: nil}
-                actions = append(actions, action)
-            }
-        }
-
-    }
-
-    // If the append request is heartbeat then ignore responding to it
-    // We are updating matchIndex and nextIndex on positive appendRequestResponse, so consume heartbeats
-    if len(event.Entries) != 0 {
-        appendResp := AppendRequestRespEvent{
-            FromId      : state.server_id,
-            Term        : state.CurrentTerm,
-            Success     : true,
-            LastLogIndex: state.GetLastLogIndex() }
-        resp := SendAction{ToId: event.FromId, Event: appendResp}
-        actions = append(actions, resp)
-    }
-    return actions
-}
-
-
-
-type int64Slice []int64
-func (array int64Slice) Len() int {
-    return len(array)
-}
-func (array int64Slice) Less(i int, j int) bool {
-    return array[i] < array[j]
-}
-func (array int64Slice) Swap(i int, j int) {
-    tmp := array[i]
-    array[j] = array[i]
-    array[i] = tmp
-}
-/********************************************************************
- *                                                                  *
- *                    Append Request Response                       *
- *                                                                  *
- ********************************************************************/
-func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (actions []interface{}) {
-
-    actions = make([]interface{}, 0)
-
-    // Track if persistent state of raft state machine changes
-    state_changed_flag := false
-    // Check and store state on persistent store
-    defer func() {
-        if state_changed_flag {
-            // Prepend StateStore action
-            actions = append(actions, state.GetStateStoreAction())
-        }
-    }()
-
-    // Check term
-    if state.CurrentTerm < event.Term {
-        // This server term is not so up-to-date, so update
-        state.myState = FOLLOWER
-        state.CurrentTerm = event.Term
-        state.VotedFor = -1
-        state_changed_flag = true
-
-        // reset alarm
-        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
-        actions = append(actions, alarm)
-        return actions
-    }
-
-    switch state.myState {
-    case LEADER:
-        if !event.Success {
-            // there are holes in follower's log
-
-            // Do not upgrade nextIndex if last log index is grater than nextIndex for that node
-            // since, this might be delayed response
-            if state.nextIndex[event.FromId] > event.LastLogIndex {
-                state.nextIndex[event.FromId] = event.LastLogIndex + 1
-            }
-
-            // Now send next batch of logs from nextIndex onwards
-            if state.nextIndex[event.FromId] > state.PersistentLog.GetLastIndex()+1 {
-                state.log_error(3, "Next index of any node will never be grater than (last log index + 1) of the leader")
-            } else if state.nextIndex[event.FromId] <= state.PersistentLog.GetLastIndex() {
-                // Resend next batch of logs from the nextIndex to the end
-                prevLog := state.GetLogOf(state.nextIndex[event.FromId] - 1)
-                startIndex := state.nextIndex[event.FromId]
-                logs := state.getLogsFrom(startIndex)   // copy server.log from startIndex to the end to "logs"
-                event1 := AppendRequestEvent{
-                    FromId:       state.server_id,
-                    Term:         state.CurrentTerm,
-                    PrevLogIndex: prevLog.Index,
-                    PrevLogTerm:  prevLog.Term,
-                    Entries:      *logs,
-                    LeaderCommit: state.commitIndex}
-                action := SendAction{ToId: event.FromId, Event: event1}
-                actions = append(actions, action)
-                return actions
-            }
-            // TODO:: decrease nextIndex here,
-            //
-        } else if state.matchIndex[event.FromId] < event.LastLogIndex {
-            state.matchIndex[event.FromId] = event.LastLogIndex
-            state.nextIndex[event.FromId] = event.LastLogIndex + 1
-
-            // lets sort
-            sorted := int64Slice(append([]int64{}, state.matchIndex[1:]...))
-            sort.Sort(sorted)               // sort in ascending order
-
-            // If there exists an N such that N > commitIndex, a majority
-            // of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-            // set commitIndex = N
-            //state.log_info(3, "Sorted match indices : %v", sorted)
-            for i := state.numberOfNodes / 2; i >= 0; i-- {
-                if sorted[i] > state.commitIndex && state.GetLogOf(sorted[i]).Term == state.CurrentTerm {
-                    // Commit all not committed eligible entries
-                    state.log_info(3, "Commiting from index %v to %v", state.commitIndex + 1, sorted[i])
-                    for k := state.commitIndex + 1; k <= sorted[i]; k++ {
-                        action := CommitAction{
-                            Log:  *state.GetLogOf(k),
-                            Err:   nil}
-                        actions = append(actions, action)
-                    }
-
-                    //server.commitIndex = sorted[i]
-                    state.commitIndex = sorted[i]
-                    break
-                }
-            }
-        }
-
-        // Don't send next batch of logs from nextIndex when reply is true,
-        // delaying append request only on false reply
-
-
-        // continue flow to next case for server.currentTerm > event.term
-        fallthrough
-    case CANDIDATE:
-        fallthrough
-    case FOLLOWER:
-    }
-
-    return actions
-}
-
-/********************************************************************
- *                                                                  *
  *                          Timeout                                 *
  *                                                                  *
  ********************************************************************/
@@ -758,7 +311,7 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
             FromId:       state.server_id,
             Term:         state.CurrentTerm,
             PrevLogIndex: state.GetLastLogIndex(),
-            PrevLogTerm:  state.getLastLog().Term,
+            PrevLogTerm:  state.GetLastLogTerm(),
             Entries:      []LogEntry{},
             LeaderCommit: state.commitIndex}
         heartbeatActions := state.broadcast(heartbeatEvent) // broadcast request vote event
@@ -780,59 +333,9 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
             FromId:       state.server_id,
             Term:         state.CurrentTerm,
             LastLogIndex: state.GetLastLogIndex(),
-            LastLogTerm:  state.getLastLog().Term}
+            LastLogTerm:  state.GetLastLogTerm()}
         voteReqActions := state.broadcast(voteReq) // broadcast request vote event
         actions = append(actions, voteReqActions...)
-    }
-    return actions
-}
-
-/********************************************************************
- *                                                                  *
- *                     Append from client                           *
- *                                                                  *
- ********************************************************************/
-func (state *StateMachine) appendClientRequest(event *[]AppendEvent) (actions []interface{}) {
-
-    actions = []interface{}{}
-
-    switch state.myState {
-    case LEADER:
-        prevLogIndex := state.GetLastLogIndex()
-        prevLogTerm  := state.getLastLog().Term
-
-        logs := []LogEntry{}
-        for _, ev := range *event {
-            log := LogEntry{Index: state.GetLastLogIndex() + 1, Term: state.CurrentTerm, Data: ev.Data}
-            state.PersistentLog.Append(log)
-            logs = append(logs, log)
-        }
-
-        appendReq := AppendRequestEvent{
-            FromId:       state.server_id,
-            Term:         state.CurrentTerm,
-            PrevLogIndex: prevLogIndex,
-            PrevLogTerm:  prevLogTerm,
-            Entries:      logs,
-            LeaderCommit: state.commitIndex}
-                               // Append to self log
-        state.matchIndex[state.server_id] = state.GetLastLogIndex()    // Update self matchIndex
-
-
-        actions = append(actions, state.broadcast(appendReq)...)
-    case CANDIDATE:
-        fallthrough
-    case FOLLOWER:
-        // Return not a leader commit action
-        for _, ev := range *event {
-            action := CommitAction{
-                Log : LogEntry{Index:-1, Term: state.CurrentTerm, Data: ev.Data},
-                Err : Error_NotLeader{ LeaderId : state.GetCurrentLeader()} }
-
-            actions = append(actions, action)
-        }
-
-        state.log_warning(3, "Not a leader, redirecting to leader")
     }
     return actions
 }

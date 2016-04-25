@@ -13,6 +13,9 @@ import (
     "path"
 )
 
+/**
+ *  Debug tools
+ */
 func (rn RaftNode) log_error(skip int, format string, args ...interface{}) {
     format = fmt.Sprintf("[RN:%v] %v ", strconv.Itoa(rn.GetId()), strconv.Itoa(rn.GetCurrentTerm())) + format
     logging.Error(skip, format, args...)
@@ -28,38 +31,41 @@ func (rn RaftNode) log_warning(skip int, format string, args ...interface{}) {
 
 
 type RaftNode struct {
-                             // implements Node interface
-    eventCh         chan interface{}
-    timeoutCh       chan interface{}
-                             //config          Config
-    LogDir          string   // Log file directory for this node
-    server_state   *rsm.StateMachine
-    clusterServer   cluster.Server
-                             //clusterServer   *mock.MockServer
-    timer           *time.Timer
+    eventCh       chan interface{}      // Event channel for client requests
 
-                             // A channel for client to listen on. What goes into Append must come out of here at some point.
-    CommitChannel   chan rsm.CommitAction
-    ShutdownChannel chan int
-    isUp            bool
-    isInitialized   bool
+    LogDir        string                // Log file directory for this node
+    server_state  *rsm.StateMachine     // Raft state machine
+    clusterServer cluster.Server        // Network cluster for internal raft nodes communication
 
-                             // Wait in shutdown function until the processEvents go routine returns and all resources gets cleared
-    waitShutdown    sync.WaitGroup
-    ServerList      []string // List of addrs of other raft nodes, 0th addr is null
+    timer         *time.Timer           // Timeout channel to wait on timeout
+
+    CommitChannel chan rsm.CommitAction // A channel for client to listen on.
+                                        // What goes into Append must come out of here at some point.
+    shutDownChan  chan int              // Closing this channel will force raft thread to exit
+    isUp          bool                  // Is raft running?
+    isInitialized bool                  // Is raft initialized?
+
+    waitShutdown  sync.WaitGroup        // Wait on this wait group until every thread of raft is returned
+    ServerList    []string              // List of addrs of other raft nodes, 0th addr is null
 }
 
 
-// Client's message to Raft node
+/***
+ *  API for client
+ */
+// Append request from client
 func (rn *RaftNode) Append(data interface{}) {
     rn.eventCh <- rsm.AppendEvent{Data: data}
 }
-// Called from client handler, which will first apply a log to state machine then instructs here to update lastApplied
+// When client applies a log to state machine, it instructs here to update lastApplied
 func (rn *RaftNode) UpdateLastApplied(index int64) {
     rn.eventCh <- rsm.UpdateLastAppliedEvent{Index: index}
 }
 
 func (rn *RaftNode) processEvents() {
+    rn.waitShutdown.Add(1)
+    defer rn.waitShutdown.Done()
+
     rn.log_info(3, "Process events started")
     if !rn.IsNodeInitialized() {
         rn.log_error(3, "Raft node not initialized")
@@ -161,16 +167,14 @@ func (rn *RaftNode) processEvents() {
         /*
          *  Shutdown event
          */
-        case _, ok := <-rn.ShutdownChannel:
+        case _, ok := <-rn.shutDownChan:
             if !ok {
                 // If channel closed, return from function
                 close(rn.CommitChannel)
                 close(rn.eventCh)
-                close(rn.timeoutCh)
                 rn.server_state.PersistentLog.Close()
                 rn.clusterServer.Close() // in restoring the node, restarting this cluster is not possible, so avoid closing
                 rn.server_state = &rsm.StateMachine{}
-                rn.waitShutdown.Done()
                 return
             }
         //default:
@@ -262,8 +266,7 @@ func (rn *RaftNode) Shutdown() {
     rn.isUp = false
     rn.isInitialized = false
     rn.timer.Stop()
-    rn.waitShutdown.Add(1)
-    close(rn.ShutdownChannel)       // Closing this channel would trigger the go routine to terminate
+    close(rn.shutDownChan)       // Closing this channel would trigger the go routine to terminate
     rn.waitShutdown.Wait()
 }
 
@@ -276,13 +279,13 @@ func (rn *RaftNode) GetId() int {
     }
 }
 
-func (rn *RaftNode) GetLogAt(index int64) rsm.LogEntry { // TODO:: return nil on error
+func (rn *RaftNode) GetLogAt(index int64) *rsm.LogEntry {
     if ! rn.IsNodeInitialized() {
         logging.Warning(3, "Node not initialized")
-        return rsm.LogEntry{};
+        return nil;
     }
 
-    return *rn.server_state.GetLogOf(index)
+    return rn.server_state.GetLogAt(index)
 }
 
 func (rn *RaftNode) GetCurrentTerm() int {

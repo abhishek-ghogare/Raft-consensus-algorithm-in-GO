@@ -16,7 +16,7 @@ import (
     "encoding/gob"
 )
 
-const CONNECTION_TIMEOUT = 100*time.Second // in seconds
+const CONNECTION_TIMEOUT = 10*time.Minute // in seconds
 
 /*
  *  Debug tools
@@ -46,15 +46,18 @@ type Request struct {
     Message  fs.Msg // Request from client
 }
 
+/*
+ *  Client handler
+ */
 type ClientHandler struct {
     Raft             *raft_node.RaftNode
-    ActiveReq        map[int]chan fs.Msg    // Mapping of request id to channel on which serve thread
-                                            // is waiting for the request to get replicated on raft nodes
-    ActiveReqLock    sync.RWMutex           // Lock on active requests map
-    NextReqId        int                    // Next request id available to be assigned to next request
-    ClientPort       int                    // Port on which the client handler will listen for client requests
+    ActiveReq        map[int]chan fs.Msg // Mapping of request id to channel on which serve thread
+                                         // is waiting for the request to get replicated on raft nodes
+    ActiveReqLock    sync.RWMutex        // Lock on active requests map
+    NextReqId        int                 // Next request id available to be assigned to next request
+    ClientPort       int                 // Port on which the client handler will listen for client requests
     WaitOnServerExit sync.WaitGroup
-    ShutDownChan     chan int               // This channel is closed in shutdown to force all threads to stop
+    shutDownChan     chan int            // This channel is closed in shutdown to force all threads to stop
 }
 
 /***
@@ -90,7 +93,7 @@ func New(Id int, config *raft_config.Config, restore bool) (chd *ClientHandler) 
         ActiveReq   : make(map[int]chan fs.Msg),
         NextReqId   : 0,
         ClientPort  : config.ClientPorts[Id],
-        ShutDownChan: make(chan int) }
+        shutDownChan: make(chan int) }
 
     return chd
 }
@@ -130,7 +133,7 @@ func (chd *ClientHandler) Start() {
                     // Raft node closed
                     break HandlerLoop
                 }
-            case <-chd.ShutDownChan:
+            case <-chd.shutDownChan:
                 // Wait on shutdown channel
                 break HandlerLoop
             }
@@ -147,8 +150,9 @@ func (chd *ClientHandler) Start() {
 
         for {
             select {
-            case <-chd.ShutDownChan:
+            case <-chd.shutDownChan:
                 chd.log_info(3, "Raft node shutdown, exiting client listener thread")
+                tcp_acceptor.Close()
                 return
             default:
                 tcp_acceptor.SetDeadline(time.Now().Add(time.Second*2))  // Listen on socket for 2 sec, then check if shutdown
@@ -235,7 +239,7 @@ func (chd *ClientHandler) serveClient(conn *net.TCPConn) {
 func (chd *ClientHandler) handleCommit (commitAction rsm.CommitAction) {
     var response *fs.Msg
 
-    request := commitAction.Log.Data.(Request)
+    request := commitAction.Data.(Request)
 
     if commitAction.Err == nil {                        // Check if replication was successful
         response = fs.ProcessMsg(&request.Message)      // Apply request to state machine, i.e. Filesystem
@@ -253,7 +257,7 @@ func (chd *ClientHandler) handleCommit (commitAction rsm.CommitAction) {
         }
     }
 
-    chd.Raft.UpdateLastApplied(commitAction.Log.Index)  // Update last applied
+    chd.Raft.UpdateLastApplied(commitAction.Index)      // Update last applied
 
     // Reply only if the client has requested this server
     if request.ServerId == chd.Raft.GetId() {
@@ -348,6 +352,7 @@ func (chd *ClientHandler) replyToClient(conn *net.TCPConn, msg *fs.Msg) bool {
  */
 func (chd *ClientHandler) Shutdown() {
     chd.log_info(3, "Client handler shuting down")
-    close(chd.ShutDownChan)     // Shutdown commit handler and client listener threads
+    close(chd.shutDownChan)     // Shutdown commit handler and client listener threads
+    chd.WaitOnServerExit.Wait()
     chd.Raft.Shutdown()         // Shutdown raft node
 }

@@ -25,9 +25,8 @@ func NewRaftNode(Id int, config *raft_config.Config) *RaftNode {
         server_state        : server_state,
         clusterServer       : clusterServer,
         eventCh             : make(chan interface{}, 500),   // TODO:: change size to 500
-        timeoutCh           : make(chan interface{}),
         CommitChannel       : make(chan rsm.CommitAction, 20000),
-        ShutdownChannel     : make(chan int),
+        shutDownChan        : make(chan int),
         LogDir              : config.LogDir,
         isUp                : false,
         isInitialized       : true,
@@ -51,10 +50,9 @@ func RestoreServerState(Id int, config *raft_config.Config) *RaftNode {
     raft := RaftNode{
         server_state        : server_state,
         clusterServer       : clusterServer,
-        eventCh             : make(chan interface{}),
-        timeoutCh           : make(chan interface{}),
+        eventCh             : make(chan interface{}, 500),
         CommitChannel       : make(chan rsm.CommitAction, 20000),
-        ShutdownChannel     : make(chan int),
+        shutDownChan        : make(chan int),
         LogDir              : config.LogDir,
         isUp                : false,
         isInitialized       : true,
