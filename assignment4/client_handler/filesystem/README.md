@@ -9,9 +9,7 @@ simple telnet compatible API. Each file has a version number, and the server kee
 
 
 ```
-> go run server.go & 
-
-> telnet localhost 8080
+> telnet localhost <raft client port>
   Connected to localhost.
   Escape character is '^]'
   read foo
@@ -47,16 +45,8 @@ For `write` and `cas` and in the response to the `read` command, the content byt
 
 Files can have an optional expiry time, _exptime_, expressed in seconds. A subsequent `cas` or `write` cancels an earlier expiry time, and imposes the new time. By default, _exptime_ is 0, which represents no expiry. 
 
-## Install
-
-```
-go get github.com/cs733/assignment1
-go test github.com/cs733/assignment1/...
-```
-
 ## Limits and Limitations
 
-- Port is fixed at 8080
 - Files are in-memory. There's no persistence.
 - If the command or contents line is in error such that the server
   cannot reliably figure out the end of the command, the connection is
