@@ -1,19 +1,19 @@
 Implementation of [Raft consensus algorithm](https://raft.github.io/) in GO
 ============================================================================
-## Overview
+# Overview
 #### What is Raft?
 Raft is a consensus algorithm that is designed to be easy to understand. It's equivalent to Paxos in fault-tolerance and performance. The difference is that it's decomposed into relatively independent subproblems, and it cleanly addresses all major pieces needed for practical systems. We hope Raft will make consensus available to a wider audience, and that this wider audience will be able to develop a variety of higher quality consensus-based systems than are available today.
 [Ref : [The Raft Consensus Algorithm](https://raft.github.io/)]
 
 This package implements the Raft mechanism in GO language. Leveldb is used for underlying persistent log store requirement (github.com/cs733-iitb/log/). There are slight customizations from original [Raft: In Search of an Understandable Consensus Algorithm](https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf) specification. The read requests from clients are not redirected to a leader and they are not replicated. Any raft node can serve read requests regardless of their state.
 
-## Setup
+# Setup
 ```
 # Requires libzmq3-dev library
 go get github.com/cs733-iitb/log/...
 go build raft_main.go
 ```
-## Usage
+# Usage
 ```
 Usage of raft_main:
   -clean_start
@@ -26,7 +26,7 @@ Usage of raft_main:
 ```
 Use `sample_client` program to communicate with the raft cluster.
 
-## Code Structure
+# Code Structure
 The package is divided into different sub-packages.
 
 #### Client Handler
@@ -100,8 +100,8 @@ type Config struct {
 Client package for encoding and decoding file system requests response sent over TCP connection. A simple command line client program `sample_client.go` uses this Client class to communicate to server.
 `sample_client.go` can be used for testing purpose.
 
-## Version
+# Version
 1.0.0
 
-## Contact
+# Contact
   - Developer : [Abhishek Ghogare](https://github.com/avg598)
