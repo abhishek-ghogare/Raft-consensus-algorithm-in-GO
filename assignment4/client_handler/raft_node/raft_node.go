@@ -82,37 +82,80 @@ func (rn *RaftNode) processEvents() {
     for {
         var ev interface{}
         select {
-        case ev = <-rn.timer.C:
-            rn.log_info(3, "Timeout event occured")
-            actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
-            rn.doActions(actions)
-
         /*
          *  Cluster msg received
          */
         case ev = <- rn.clusterServer.Inbox():
             ev := ev.(*cluster.Envelope)
 
-            // Debug logging
-            switch ev.Msg.(type) {
-            case rsm.AppendRequestEvent:
-                appendEvent := ev.Msg.(rsm.AppendRequestEvent)
-                if len(appendEvent.Entries) != 0 {
-                    // If not heartbeat
-                    fromIndex := appendEvent.PrevLogIndex+1
-                    lastIndex := fromIndex + (int64)(len(appendEvent.Entries)-1)
-                    rn.log_info(3, "%25v %2v <<-- %-14v from:%v to:%v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, fromIndex, lastIndex)
+            // One response event for each node
+            appendRspList := make([]*rsm.AppendRequestRespEvent, rn.server_state.GetNumberOfNodes())
+            //For all other events
+            messages := []interface{}{}
+
+            // filter duplicate append request responses, since only latest response is correct on
+            count := 0
+            MsgFetcherLoop:
+            for count=1 ;  ; count++{
+                switch ev.Msg.(type) {
+                case rsm.AppendRequestEvent:
+                    appendEvent := ev.Msg.(rsm.AppendRequestEvent)
+                    if len(appendEvent.Entries) != 0 {
+                        // If not heartbeat
+                        fromIndex := appendEvent.PrevLogIndex+1
+                        lastIndex := fromIndex + (int64)(len(appendEvent.Entries)-1)
+                        rn.log_info(3, "%25v %2v <<-- %-14v from:%v to:%v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, fromIndex, lastIndex)
+                    }
+
+                    messages = append(messages, ev.Msg)
+                case rsm.RequestVoteEvent :
+                    rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
+
+                    messages = append(messages, ev.Msg)
+                case rsm.RequestVoteRespEvent :
+                    rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
+
+                    messages = append(messages, ev.Msg)
+                case rsm.AppendRequestRespEvent:
+                    rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
+
+                    respEv := ev.Msg.(rsm.AppendRequestRespEvent)
+                    appendRspList[respEv.FromId-1] = &respEv        // Store latest response event, replace old one
                 }
-            case rsm.AppendRequestRespEvent:
-                rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
-            case rsm.RequestVoteEvent :
-                rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
-            case rsm.RequestVoteRespEvent :
-                rn.log_info(3, "%25v %2v <<-- %-14v %+v", reflect.TypeOf(ev.Msg).Name(), rn.GetId(), ev.Pid, ev.Msg)
+
+                if count>=rsm.BATCHSIZE {
+                    break
+                }
+
+                // Fetch next event if available, or break
+                select {
+                case ev = <- rn.clusterServer.Inbox():
+                //rn.log_info(3, "Fetching another event, append events : %v", len(appendEvents))
+                default:
+                    break MsgFetcherLoop
+                }
+            }
+            rn.log_info(3, "Cluster messages received of length %v", count)
+            // All append resp events
+            for _, m := range appendRspList {
+                if m !=nil {
+                    act := rn.server_state.ProcessEvent(*m)
+                    rn.doActions(act)
+                }
             }
 
-            event := ev.Msg.(interface{})
-            actions := rn.server_state.ProcessEvent(event)
+            // All other events
+            for _, m := range messages {
+                actions := rn.server_state.ProcessEvent(m)
+                rn.doActions(actions)
+            }
+
+        /*
+         *  Timeout event occurred
+         */
+        case ev = <-rn.timer.C:
+            rn.log_info(3, "Timeout event occurred")
+            actions := rn.server_state.ProcessEvent(rsm.TimeoutEvent{})
             rn.doActions(actions)
 
         /*
@@ -120,7 +163,7 @@ func (rn *RaftNode) processEvents() {
          */
         case ev = <-rn.eventCh:
 
-            // Get batch of max 500 requests
+            // Get batch of max BATCHSIZE requests
             appendEvents     := []rsm.AppendEvent{}
             lastAppliedEvent := rsm.UpdateLastAppliedEvent{}
 

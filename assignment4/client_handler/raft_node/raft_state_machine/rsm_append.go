@@ -262,6 +262,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
                 state.nextIndex[event.FromId] = event.LastLogIndex + 1
             }
 
+            /*
             // Now send next batch of logs from nextIndex onwards
             if state.nextIndex[event.FromId] > state.PersistentLog.GetLastIndex()+1 {
                 state.log_error(3, "Next index of any node will never be grater than (last log index + 1) of the leader")
@@ -280,7 +281,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
                 action := SendAction{ToId: event.FromId, Event: event1}
                 actions = append(actions, action)
                 return actions
-            }
+            }*/
         } else if state.matchIndex[event.FromId] < event.LastLogIndex {
             state.matchIndex[event.FromId] = event.LastLogIndex
             state.nextIndex[event.FromId] = event.LastLogIndex + 1
@@ -314,7 +315,27 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
 
         // Don't send next batch of logs from nextIndex when reply is true,
         // delaying append request only on false reply
+        // Eventually a follower will reply false with its last log index when it receives
+        // heart beat from leader with latest log index, if follower log is out-dated.
 
+        // Now send next batch of logs from nextIndex onwards
+        if state.nextIndex[event.FromId] > state.PersistentLog.GetLastIndex()+1 {
+            state.log_error(3, "Next index of any node will never be grater than (last log index + 1) of the leader")
+        } else if state.nextIndex[event.FromId] <= state.PersistentLog.GetLastIndex() {
+            // Resend next batch of logs from the nextIndex to the end
+            prevLog := state.GetLogAt(state.nextIndex[event.FromId] - 1)
+            startIndex := state.nextIndex[event.FromId]
+            logs := state.getLogsFrom(startIndex)   // copy server.log from startIndex to the end to "logs"
+            event1 := AppendRequestEvent{
+                FromId:       state.server_id,
+                Term:         state.CurrentTerm,
+                PrevLogIndex: prevLog.Index,
+                PrevLogTerm:  prevLog.Term,
+                Entries:      *logs,
+                LeaderCommit: state.commitIndex}
+            action := SendAction{ToId: event.FromId, Event: event1}
+            actions = append(actions, action)
+        }
 
         // continue flow to next case for server.currentTerm > event.term
         fallthrough

@@ -258,6 +258,9 @@ func (state *StateMachine) GetCurrentTerm() int {
 func (state *StateMachine) GetServerId() int {
     return state.server_id
 }
+func (state *StateMachine) GetNumberOfNodes() int {
+    return state.numberOfNodes
+}
 func (state *StateMachine) GetCurrentLeader() int {
     return state.currentLdr
 }
