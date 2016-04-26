@@ -95,6 +95,8 @@ func New(Id int, config *raft_config.Config, restore bool) (chd *ClientHandler) 
         ClientPort  : config.ClientPorts[Id],
         shutDownChan: make(chan int) }
 
+    chd.WaitOnServerExit.Add(2) // Client handler and listener
+
     return chd
 }
 
@@ -119,10 +121,6 @@ func (chd *ClientHandler) Start() {
 
     chd.log_info(3, "Starting commit handler")
     go func () {
-        // Make sync start function to wait on this thread
-        defer chd.WaitOnServerExit.Done()
-        defer chd.log_info(3, "Exiting Commit handler")
-
         HandlerLoop:
         for {
 
@@ -140,22 +138,20 @@ func (chd *ClientHandler) Start() {
             }
         }
 
-        chd.log_info(3, "Raft node shutdown, exiting commit handler thread")
+        chd.log_info(3, "Raft node shutdown, exiting commit handler thread %+v", chd.WaitOnServerExit)
+        // Make sync start function to wait on this thread
+        chd.WaitOnServerExit.Done()
     }()
 
     chd.log_info(3, "Starting client listener")
     go func () {
-        // Make sync start function to wait on this thread
-        defer chd.WaitOnServerExit.Done()
-        defer chd.log_info(3, "Exiting client listener")
-
-
+        ListenerLoop:
         for {
             select {
             case <-chd.shutDownChan:
                 chd.log_info(3, "Raft node shutdown, exiting client listener thread")
                 tcp_acceptor.Close()
-                return
+                break ListenerLoop
             default:
                 tcp_acceptor.SetDeadline(time.Now().Add(time.Second*2))  // Listen on socket for 2 sec, then check if shutdown
                 tcp_conn, err := tcp_acceptor.AcceptTCP()
@@ -170,6 +166,9 @@ func (chd *ClientHandler) Start() {
                 go chd.serveClient(tcp_conn)    // Start serve thread
             }
         }
+        // Make sync start function to wait on this thread
+        chd.WaitOnServerExit.Done()
+        chd.log_info(3, "Exiting client listener %+v", chd.WaitOnServerExit)
     }()
 }
 
@@ -178,7 +177,11 @@ func (chd *ClientHandler) Start() {
  *  Synchronously start client handler, wait for all threads to exit
  */
 func (chd *ClientHandler) StartSync() {
-    chd.WaitOnServerExit.Add(2) // Client handler and listener
+    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
+    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
+    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
+    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
+    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
     chd.Start()
     chd.WaitOnServerExit.Wait()
 }

@@ -35,6 +35,5 @@ func main() {
     logging.Logger.Println("Logger initialised")
 
     server := client_handler.New(*serverId, config, !*cleanStart)
-
     server.StartSync()
 }
