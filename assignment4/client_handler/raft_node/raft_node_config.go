@@ -7,11 +7,14 @@ import (
     "os"
     "path"
     "strconv"
+    "encoding/gob"
 )
 
 
 // Returns a Node object
 func NewRaftNode(Id int, config *raft_config.Config) *RaftNode {
+    goregister()
+
     // Remove all persistent store
     os.RemoveAll(config.LogDir + "/raft_" + strconv.Itoa(Id) + "/")
 
@@ -41,7 +44,7 @@ func NewRaftNode(Id int, config *raft_config.Config) *RaftNode {
 }
 
 func RestoreServerState(Id int, config *raft_config.Config) *RaftNode {
-
+    goregister()
     clusterServer, err := cluster.New(Id,config.ClusterConfig)
     if err!=nil {
         (&RaftNode{}).log_error(3, "Unable to create cluster server : %v", err.Error())
@@ -61,4 +64,15 @@ func RestoreServerState(Id int, config *raft_config.Config) *RaftNode {
 
     raft.log_info(3, "Raft node restored and initialised")
     return &raft
+}
+
+func goregister() {
+    // Register the structures to gob
+    gob.Register(rsm.AppendRequestEvent{})
+    gob.Register(rsm.AppendRequestRespEvent{})
+    gob.Register(rsm.RequestVoteEvent{})
+    gob.Register(rsm.RequestVoteRespEvent{})
+    //gob.Register(rsm.TimeoutEvent{})          // Not sending timeout event, no need to register
+    gob.Register(rsm.AppendEvent{})
+    gob.Register(rsm.LogEntry{})
 }

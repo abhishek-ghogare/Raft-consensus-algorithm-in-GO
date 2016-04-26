@@ -177,11 +177,6 @@ func (chd *ClientHandler) Start() {
  *  Synchronously start client handler, wait for all threads to exit
  */
 func (chd *ClientHandler) StartSync() {
-    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
-    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
-    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
-    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
-    chd.log_info(3, "Esddscsadcasdcsadcsadcsadcasdcs sd sad sad sad sd asdasasd asd  das %+v", chd.WaitOnServerExit)
     chd.Start()
     chd.WaitOnServerExit.Wait()
 }
@@ -204,9 +199,21 @@ func (chd *ClientHandler) serveClient(conn *net.TCPConn) {
             return
         }
 
+        // Check for read request,
+        if msg.Kind == 'r' /*read request*/ {
+            // Do not replicate, directly serve
+            response := fs.ProcessMsg(msg)
+            if !chd.replyToClient(conn, response) {    // Reply to client with response
+                chd.log_error(3, "Reply to client was not sucessful")
+                conn.Close()
+                return
+            }
+            continue    // Continue to next request
+        }
+
+
         //Replicate msg and after receiving at commitChannel, ProcessMsg(msg)
         reqId, waitChan := chd.RegisterRequest()
-
 
         // Send request to replicate
         request := Request{ServerId:chd.Raft.GetId(), ReqId:reqId, Message:*msg}

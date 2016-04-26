@@ -9,6 +9,8 @@ import (
     "cs733/assignment4/logging"
     "log"
     "path"
+    "os/signal"
+    "syscall"
 )
 
 func main() {
@@ -34,6 +36,23 @@ func main() {
     logging.Logger = log.New(f, "", log.Ldate | log.Lmicroseconds)
     logging.Logger.Println("Logger initialised")
 
+
     server := client_handler.New(*serverId, config, !*cleanStart)
+
+
+    // Listen to kill signals
+    c := make(chan os.Signal)
+    signal.Notify(c, os.Interrupt)
+    signal.Notify(c, syscall.SIGTERM)
+    signal.Notify(c, syscall.SIGKILL)
+    signal.Notify(c, syscall.SIGHUP)
+    go func(server *client_handler.ClientHandler) {
+        <-c
+        fmt.Println("\n\n\nSHUTTING DOWN")
+        server.Shutdown()
+        os.Exit(1)
+    }(server)
+
+
     server.StartSync()
 }

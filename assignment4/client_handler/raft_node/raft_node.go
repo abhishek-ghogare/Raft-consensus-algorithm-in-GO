@@ -77,7 +77,8 @@ func (rn *RaftNode) processEvents() {
         return
     }
 
-    rn.timer = time.NewTimer(time.Duration(rn.server_state.ElectionTimeout + rand.Intn(rn.server_state.ElectionTimeout)) * time.Millisecond)
+    // Using heartbeat for first timer start to quick start
+    rn.timer = time.NewTimer(time.Duration(rn.server_state.HeartbeatTimeout + rand.Intn(rn.server_state.HeartbeatTimeout)) * time.Millisecond)
     rn.isUp = true
     for {
         var ev interface{}

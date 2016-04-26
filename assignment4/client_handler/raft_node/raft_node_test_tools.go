@@ -66,8 +66,8 @@ func makeConfigs() []*raft_config.Config {
     configBase := raft_config.Config{
         //Id                  : 1,
         LogDir              : "log file", // Log file directory for this node
-        ElectionTimeout     : 500,
-        HeartbeatTimeout    : 100,
+        ElectionTimeout     : 2000,
+        HeartbeatTimeout    : 250,
         NumOfNodes          : 5,
         ClusterConfig       : cluster.Config   {
                                                     Peers: []cluster.PeerConfig{
@@ -171,7 +171,7 @@ func (rafts Rafts) getCurrentLeader(t *testing.T) (*RaftNode) {
     var ldrTerm int
 
     // Set 10 sec time span to probe the stable leader
-    abortCh := time.NewTimer(4 * time.Second)
+    abortCh := time.NewTimer(10 * time.Second)
 
     for {
         select {
@@ -206,7 +206,7 @@ func (rafts Rafts) getCurrentLeader(t *testing.T) (*RaftNode) {
 
 func (rafts Rafts) checkSingleCommit(t *testing.T, data interface{}) error{
     // Set 5 sec time span to probe the commit channels
-    abortCh := time.NewTimer(5 * time.Second)
+    abortCh := time.NewTimer(10 * time.Second)
 
     // Set flag when either commitChannel received or the node is down
     // This will help in reading only one commit msg from any given node
@@ -237,7 +237,7 @@ func (rafts Rafts) checkSingleCommit(t *testing.T, data interface{}) error{
                             checkedNum++
                             if ci.Data != data {
                                 rafts.shutdownRafts()
-                                t.Fatalf("Got different data : expected %v , received : %v", data, ci.Data)
+                                t.Fatalf("Got different data on %v node: expected %v , received : %v",i, data, ci.Data)
                             }
                         default:
                         }
