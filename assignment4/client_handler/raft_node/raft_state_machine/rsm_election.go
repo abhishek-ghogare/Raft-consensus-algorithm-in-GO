@@ -97,7 +97,7 @@ func (state *StateMachine) voteRequestResponse(event RequestVoteRespEvent) (acti
         state.VotedFor = -1
         state_changed_flag = true
 
-        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
+        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(state.ElectionTimeout)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
         return actions
     } else if state.CurrentTerm > event.Term {
@@ -142,7 +142,6 @@ func (state *StateMachine) voteRequestResponse(event RequestVoteRespEvent) (acti
             } else if count > state.numberOfNodes/2 {
                 // become leader
 
-                state.currentLdr = state.GetServerId()  // update current leader
                 state.log_info(3, "Leader has been elected : %v", state.server_id)
                 state.initialiseLeader()
 

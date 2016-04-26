@@ -120,11 +120,12 @@ func (chd *ClientHandler) Start() {
     chd.log_info(3, "Starting commit handler")
     go func () {
         // Make sync start function to wait on this thread
-        chd.WaitOnServerExit.Add(1)
         defer chd.WaitOnServerExit.Done()
+        defer chd.log_info(3, "Exiting Commit handler")
 
         HandlerLoop:
         for {
+
             select {
             case commitAction, ok := <-chd.Raft.CommitChannel:
                 if ok {
@@ -145,8 +146,9 @@ func (chd *ClientHandler) Start() {
     chd.log_info(3, "Starting client listener")
     go func () {
         // Make sync start function to wait on this thread
-        chd.WaitOnServerExit.Add(1)
         defer chd.WaitOnServerExit.Done()
+        defer chd.log_info(3, "Exiting client listener")
+
 
         for {
             select {
@@ -176,6 +178,7 @@ func (chd *ClientHandler) Start() {
  *  Synchronously start client handler, wait for all threads to exit
  */
 func (chd *ClientHandler) StartSync() {
+    chd.WaitOnServerExit.Add(2) // Client handler and listener
     chd.Start()
     chd.WaitOnServerExit.Wait()
 }

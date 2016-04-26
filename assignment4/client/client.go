@@ -54,7 +54,9 @@ func New(config *raft_config.Config, id int) *Client {
                             ServerList  : config.ServerList,
                             conn        : nil,
                             reader      : nil}
-    client.setupConnectionToServer()
+    if ! client.setupConnectionToServer() {
+        return nil
+    }
     return &client
 }
 
@@ -62,7 +64,7 @@ func New(config *raft_config.Config, id int) *Client {
  *  Establish connection to any reachable server
  *
  */
-func (cl *Client) setupConnectionToServer() {
+func (cl *Client) setupConnectionToServer() bool {
 
     for i:=1 ; i<len(cl.ServerList) ; i++ {
 
@@ -79,10 +81,11 @@ func (cl *Client) setupConnectionToServer() {
             cl.conn = conn
             cl.reader = bufio.NewReader(conn)
             cl.lock.Unlock()
-            return
+            return true
         }
     }
     cl.log_error(3, "Unable to connect to any server, servers may be down")
+    return false
 }
 
 
@@ -168,7 +171,9 @@ func (cl *Client) sendRcv(str string) (msg *fs.Msg, err error) {
         m, err = cl.sendRcvBasic(str)
         if err!=nil {
             cl.log_warning(3, "Unable to connect : %v", err.Error())
-            cl.setupConnectionToServer()
+            for done:= cl.setupConnectionToServer() ; !done && retries<20 ; retries++ {
+                done = cl.setupConnectionToServer()
+            }
             continue
         }
 
@@ -197,7 +202,10 @@ func (cl *Client) sendRcv(str string) (msg *fs.Msg, err error) {
         } else if m.Kind == 'I' {           // If internal error, i.e. unable to replicate or timeout
             cl.log_warning(3, "Server replied with internal error")
             cl.Close()
-            cl.setupConnectionToServer()    // Again setup new connection and retry
+            // Again setup new connection and retry
+            for done:= cl.setupConnectionToServer() ; !done && retries<20 ; retries++ {
+                done = cl.setupConnectionToServer()
+            }
             continue
         } else {
             // There is no error of either "not a leader" or "internal error"

@@ -21,6 +21,7 @@ func NewRaftNode(Id int, config *raft_config.Config) *RaftNode {
     }
 
     server_state := rsm.New(Id, config)
+
     raft := RaftNode{
         server_state        : server_state,
         clusterServer       : clusterServer,

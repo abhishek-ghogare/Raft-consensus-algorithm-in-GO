@@ -36,7 +36,7 @@ const (
     FOLLOWER
     LEADER
 )
-const RandomTimeout = 1000  // Random timeout extra to election timeout
+//const RandomTimeout = 1000  // Random timeout extra to election timeout
 const BATCHSIZE = 50        // Send logs to followers in batches
 
 type LogEntry struct {
@@ -277,6 +277,7 @@ func (state *StateMachine) initialiseLeader() {
     state.matchIndex = make([]int64, state.numberOfNodes+1)
     state.nextIndex = make([]int64, state.numberOfNodes+1)
     state.matchIndex[state.server_id] = state.GetLastLogIndex()
+    state.currentLdr = state.GetServerId()  // update current leader
 
     // initialise nextIndex
     for i := 0; i <= state.numberOfNodes; i++ {
@@ -326,7 +327,7 @@ func (state *StateMachine) timeout(event TimeoutEvent) (actions []interface{}) {
         state.CurrentTerm = state.CurrentTerm + 1
         state.VotedFor = state.server_id
         state_changed_flag = true
-        actions = append(actions, AlarmAction{Time: state.ElectionTimeout + rand.Intn(RandomTimeout)})
+        actions = append(actions, AlarmAction{Time: state.ElectionTimeout + rand.Intn(state.ElectionTimeout)})
         state.receivedVote[state.server_id] = state.CurrentTerm // voting to self
 
         voteReq := RequestVoteEvent{

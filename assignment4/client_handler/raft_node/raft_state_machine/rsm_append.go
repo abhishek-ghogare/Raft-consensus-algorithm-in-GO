@@ -105,7 +105,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
         fallthrough
     case FOLLOWER:
         // Reset heartbeat timeout
-        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
+        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(state.ElectionTimeout)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
 
         // Check term
@@ -190,7 +190,7 @@ func (state *StateMachine) appendRequest(event AppendRequestEvent) (actions []in
 
     }
 
-    // If the append request is heartbeat then ignore responding to it
+    // If the append request is heartbeat then ignore responding to it if we are up-to-date with leader
     // We are updating matchIndex and nextIndex on positive appendRequestResponse, so consume heartbeats
     if len(event.Entries) != 0 {
         appendResp := AppendRequestRespEvent{
@@ -246,7 +246,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
         state_changed_flag = true
 
         // reset alarm
-        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(RandomTimeout)} // slightly greater time to receive heartbeat
+        alarm := AlarmAction{Time: state.ElectionTimeout + rand.Intn(state.ElectionTimeout)} // slightly greater time to receive heartbeat
         actions = append(actions, alarm)
         return actions
     }
@@ -256,7 +256,7 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
         if !event.Success {
             // there are holes in follower's log
 
-            // Do not upgrade nextIndex if last log index is grater than nextIndex for that node
+            // Do not upgrade nextIndex if last log index is greater than nextIndex for that node
             // since, this might be delayed response
             if state.nextIndex[event.FromId] > event.LastLogIndex {
                 state.nextIndex[event.FromId] = event.LastLogIndex + 1
@@ -281,8 +281,6 @@ func (state *StateMachine) appendRequestResponse(event AppendRequestRespEvent) (
                 actions = append(actions, action)
                 return actions
             }
-            // TODO:: decrease nextIndex here,
-            //
         } else if state.matchIndex[event.FromId] < event.LastLogIndex {
             state.matchIndex[event.FromId] = event.LastLogIndex
             state.nextIndex[event.FromId] = event.LastLogIndex + 1

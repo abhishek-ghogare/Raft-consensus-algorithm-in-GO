@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-    serverId := flag.Int("id", -1, "Id of this server")
+    serverId := flag.Int("id", -1, "mandatory Id of this server")
     configFilePath := flag.String("config", "config.json", "Path to config file")
     cleanStart := flag.Bool("clean_start", false, "Whether to start raft in clean state. WARNING:This would delete all previous state and logs")
     flag.Parse()

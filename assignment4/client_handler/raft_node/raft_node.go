@@ -77,7 +77,7 @@ func (rn *RaftNode) processEvents() {
         return
     }
 
-    rn.timer = time.NewTimer(time.Duration(rn.server_state.ElectionTimeout + rand.Intn(rsm.RandomTimeout)) * time.Millisecond)
+    rn.timer = time.NewTimer(time.Duration(rn.server_state.ElectionTimeout + rand.Intn(rn.server_state.ElectionTimeout)) * time.Millisecond)
     rn.isUp = true
     for {
         var ev interface{}
@@ -253,6 +253,7 @@ func (rn *RaftNode) doActions(actions [] interface{}) {
 
 func (rn *RaftNode) Start() {
     rn.log_info(4, "Starting raft node")
+    rand.Seed(int64(time.Now().Nanosecond()))
     go rn.processEvents()
 }
 // Signal to shut down all goroutines, stop sockets, flush log and close it, cancel timers.

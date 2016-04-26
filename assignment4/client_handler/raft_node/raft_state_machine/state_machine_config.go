@@ -72,7 +72,8 @@ func New(Id int, config *raft_config.Config) (server *StateMachine) {
     lg, err := log.Open(logPath)
     if err != nil {
         server.log_error(3, "Unable to open raft logs : %v", err)
-        return nil
+        fmt.Printf("Unable to open raft logs : %v\n", err)
+        os.Exit(2)
     }
 
     lg.SetCacheSize(1000000)    // TODO:: out of cache logs are not accessible
