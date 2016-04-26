@@ -365,7 +365,13 @@ func (chd *ClientHandler) replyToClient(conn *net.TCPConn, msg *fs.Msg) bool {
  */
 func (chd *ClientHandler) Shutdown() {
     chd.log_info(3, "Client handler shuting down")
+
+    chd.Raft.Shutdown()         // Shutdown raft node
     close(chd.shutDownChan)     // Shutdown commit handler and client listener threads
     chd.WaitOnServerExit.Wait()
-    chd.Raft.Shutdown()         // Shutdown raft node
+
+    // Disconnect all connections
+    for id,_ := range chd.ActiveReq {
+        chd.DeregisterRequest(id)
+    }
 }

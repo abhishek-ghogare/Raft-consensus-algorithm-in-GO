@@ -283,9 +283,9 @@ func TestRM_BasicTimer(t *testing.T) {
 
 
 func TestCHD_RestartAll(t *testing.T) {
-    TestRMEnd(t)
+    shutdownRafts()
     var err error
-    //time.Sleep(time.Second*5)
+    time.Sleep(time.Second*5)
     for i:=1 ; i<=baseConfig.NumOfNodes ; i++ {
         // Resume raft from previous state
         serverCmds[i] = exec.Command("/usr/bin/go", "run", "raft_main.go", "-id", strconv.Itoa(i), "-config", baseConfig.LogDir+"config.json")
@@ -294,6 +294,7 @@ func TestCHD_RestartAll(t *testing.T) {
         }
         time.Sleep(10*time.Millisecond) // Small time for election
     }
+    time.Sleep(time.Second*20)
 }
 
 
