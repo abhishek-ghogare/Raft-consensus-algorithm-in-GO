@@ -7,12 +7,12 @@ import (
     "bytes"
     "sync"
     "strings"
-    "cs733/assignment4/raft_config"
-    "cs733/assignment4/client"
-    "cs733/assignment4/client_handler/filesystem/fs"
     "errors"
     "os"
     "github.com/cs733-iitb/cluster"
+    "github.com/avg598/cs733/raft_config"
+    "github.com/avg598/cs733/client"
+    "github.com/avg598/cs733/client_handler/filesystem/fs"
 )
 
 //var mockCluster *mock.MockCluster

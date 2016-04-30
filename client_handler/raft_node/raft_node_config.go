@@ -1,13 +1,13 @@
 package raft_node
 
 import (
-    rsm "cs733/assignment4/client_handler/raft_node/raft_state_machine"
-    "cs733/assignment4/raft_config"
     "github.com/cs733-iitb/cluster"
     "os"
     "path"
     "strconv"
     "encoding/gob"
+    rsm "github.com/avg598/cs733/client_handler/raft_node/raft_state_machine"
+    "github.com/avg598/cs733/raft_config"
 )
 
 

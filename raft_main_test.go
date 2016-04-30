@@ -2,20 +2,20 @@ package main
 
 import (
     "os"
-    "cs733/assignment4/raft_config"
-    "github.com/cs733-iitb/cluster"
     "time"
     "testing"
     "fmt"
     "bytes"
     "errors"
-    "cs733/assignment4/client_handler/filesystem/fs"
     "os/exec"
     "strconv"
-    "cs733/assignment4/client"
     "sync"
     "strings"
     "syscall"
+    "github.com/avg598/cs733/client"
+    "github.com/avg598/cs733/client_handler/filesystem/fs"
+    "github.com/avg598/cs733/raft_config"
+    "github.com/cs733-iitb/cluster"
 )
 
 var baseConfig *raft_config.Config
@@ -435,7 +435,7 @@ func TestCHD_BasicTimer(t *testing.T) {
 
 func TestCHD_ConcurrentWrites(t *testing.T) {
     time.Sleep(1 * time.Second)
-    nclients := 500
+    nclients := 2
     niters := 10
     clients := make([]*client.Client, nclients)
     for i := 0 ; i < nclients ; i++ {
@@ -493,7 +493,7 @@ func TestCHD_ConcurrentWrites(t *testing.T) {
 // client loops around until each CAS succeeds. The number of concurrent clients has been
 // reduced to keep the testing time within limits.
 func TestCHD_ConcurrentCas(t *testing.T) {
-    nclients := 100
+    nclients := 2
     niters := 10
 
     clients := make([]*client.Client, nclients)

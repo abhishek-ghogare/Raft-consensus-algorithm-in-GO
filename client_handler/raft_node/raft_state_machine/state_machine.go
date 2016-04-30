@@ -1,12 +1,12 @@
 package raft_state_machine
 
 import (
-    "cs733/assignment4/logging"
     "fmt"
     "github.com/cs733-iitb/log"
     "math/rand"
     "strconv"
     "reflect"
+    "github.com/avg598/cs733/logging"
 )
 
 /**

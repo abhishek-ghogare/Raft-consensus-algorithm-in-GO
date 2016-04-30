@@ -1,10 +1,10 @@
 package main
 
 import (
-    "cs733/assignment4/raft_config"
+    "github.com/avg598/cs733/raft_config"
     "fmt"
     "os"
-    "cs733/assignment4/client"
+    "github.com/avg598/cs733/client"
 )
 
 func usage () {

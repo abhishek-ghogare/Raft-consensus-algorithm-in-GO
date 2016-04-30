@@ -1,0 +1,22 @@
+{
+	"LogDir"			: "/tmp/raft/",
+	"ElectionTimeout"	: 2000,
+	"HeartbeatTimeout"	: 800,
+	"NumOfNodes"		: 5,
+	"ClusterConfig"		:	{	"Peers"			: [
+									{"Id":1,"Address":"127.0.0.1:7001"},
+									{"Id":2,"Address":"127.0.0.1:7002"},
+									{"Id":3,"Address":"127.0.0.1:7003"},
+									{"Id":4,"Address":"127.0.0.1:7004"},
+									{"Id":5,"Address":"127.0.0.1:7005"}],
+								"InboxSize"		:100,
+								"OutboxSize"	:100},
+	"ClientPorts"		: [0,9001,9002,9003,9004,9005],
+	"ServerList"		: [
+							"",
+							"127.0.0.1:9001",
+							"127.0.0.1:9002",
+							"127.0.0.1:9003",
+							"127.0.0.1:9004",
+							"127.0.0.1:9005" ]
+}

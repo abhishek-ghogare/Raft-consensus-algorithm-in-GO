@@ -3,11 +3,11 @@ package raft_state_machine
 import (
     "os"
     "encoding/json"
-    "github.com/cs733-iitb/log"
-    "cs733/assignment4/raft_config"
     "fmt"
     "strconv"
     "path"
+    "github.com/cs733-iitb/log"
+    "github.com/avg598/cs733/raft_config"
 )
 
 func fromServerStateFile(serverStateFile string) (serState *StateMachine, err error) {

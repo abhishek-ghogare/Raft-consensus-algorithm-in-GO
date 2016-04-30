@@ -3,14 +3,14 @@ package main
 import (
     "os"
     "fmt"
-    "cs733/assignment4/raft_config"
-    "cs733/assignment4/client_handler"
     "flag"
-    "cs733/assignment4/logging"
     "log"
     "path"
     "os/signal"
     "syscall"
+    "github.com/avg598/cs733/raft_config"
+    "github.com/avg598/cs733/client_handler"
+    "github.com/avg598/cs733/logging"
 )
 
 func main() {

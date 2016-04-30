@@ -6,17 +6,17 @@ import (
     "net"
     "os"
     "strconv"
-    "cs733/assignment4/client_handler/raft_node"
-    "cs733/assignment4/client_handler/filesystem/fs"
     "sync"
-    rsm "cs733/assignment4/client_handler/raft_node/raft_state_machine"
-    "cs733/assignment4/raft_config"
-    "cs733/assignment4/logging"
     "time"
     "encoding/gob"
+    "github.com/avg598/cs733/client_handler/raft_node"
+    "github.com/avg598/cs733/logging"
+    "github.com/avg598/cs733/raft_config"
+    rsm "github.com/avg598/cs733/client_handler/raft_node/raft_state_machine"
+    "github.com/avg598/cs733/client_handler/filesystem/fs"
 )
 
-const CONNECTION_TIMEOUT = 10*time.Minute // in seconds
+const CONNECTION_TIMEOUT = 30*time.Second // in seconds
 
 /*
  *  Debug tools

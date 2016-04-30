@@ -6,11 +6,11 @@ import (
     "bufio"
     "strconv"
     "errors"
-    "cs733/assignment4/logging"
-    "cs733/assignment4/client_handler/filesystem/fs"
-    "cs733/assignment4/raft_config"
     "strings"
     "sync"
+    "github.com/avg598/cs733/logging"
+    "github.com/avg598/cs733/client_handler/filesystem/fs"
+    "github.com/avg598/cs733/raft_config"
 )
 
 
