@@ -13,6 +13,16 @@ This package implements the Raft mechanism in GO language. Leveldb is used for u
 go get github.com/cs733-iitb/log/...
 go build raft_main.go
 ```
+#### Run locally
+```
+go build
+./cs733 -clean_start -config config.json -id 1 & 
+./cs733 -clean_start -config config.json -id 2 & 
+./cs733 -clean_start -config config.json -id 3 & 
+./cs733 -clean_start -config config.json -id 4 & 
+./cs733 -clean_start -config config.json -id 5 &
+```
+Note: Default log directory in config.json is `/tmp/raft`. Logs of this run will be stored in `/tmp/raft/debug.log`
 # Usage
 ```
 Usage of raft_main:
